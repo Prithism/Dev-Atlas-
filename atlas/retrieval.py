@@ -6,13 +6,17 @@ Do not change the public method signatures without coordinating with Member A.
 from __future__ import annotations
 
 import json
+import logging
 import pickle
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import chromadb
 import networkx as nx
 from sentence_transformers import SentenceTransformer
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -35,7 +39,14 @@ class Retriever:
 
         client = chromadb.PersistentClient(path=chroma_path)
         self.coll = client.get_collection("people")
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.model = None
+        try:
+            self.model = SentenceTransformer("all-MiniLM-L6-v2")
+        except Exception as exc:
+            log.warning(
+                "SentenceTransformer unavailable, falling back to keyword retrieval: %s",
+                exc,
+            )
 
         # normalize centrality so it contributes meaningfully to scoring
         centralities = [
@@ -54,56 +65,61 @@ class Retriever:
                         p = json.loads(line)
                         self._people[p["id"]] = p
 
+        self._search_docs: dict[str, str] = {}
+        for pid, person in self._people.items():
+            repo_text = []
+            if pid in self.G:
+                for nbr in self.G.successors(pid):
+                    node_data = self.G.nodes.get(nbr, {})
+                    if node_data.get("type") == "repo":
+                        repo_text.append(node_data.get("description", ""))
+                        repo_text.append(node_data.get("name", nbr))
+                    elif node_data.get("type") == "event":
+                        repo_text.append(node_data.get("name", nbr))
+            self._search_docs[pid] = " ".join(
+                filter(
+                    None,
+                    [
+                        person.get("name", ""),
+                        person.get("bio", ""),
+                        person.get("location", ""),
+                        " ".join(person.get("languages", [])),
+                        " ".join(person.get("evidence", [])),
+                        " ".join(repo_text),
+                    ],
+                )
+            ).lower()
+
     # ------------------------------------------------------------------
     # Public API — do not rename or reorder parameters
     # ------------------------------------------------------------------
 
     def query(self, text: str, k: int = 10) -> list[Result]:
         """Vector search + 1-hop graph expansion, blended with centrality."""
-        n_results = min(k * 2, self.coll.count())
-        if n_results == 0:
-            return []
+        if self.model is not None:
+            try:
+                n_results = min(k * 2, self.coll.count())
+                if n_results > 0:
+                    embedding = self.model.encode(text).tolist()
+                    raw = self.coll.query(
+                        query_embeddings=[embedding],
+                        n_results=n_results,
+                        include=["metadatas", "documents", "distances"],
+                    )
+                    return self._expand_ranked_hits(
+                        [
+                            (pid, max(0.0, 1.0 - float(dist)))
+                            for pid, dist in zip(
+                                raw["ids"][0] if raw["ids"] else [],
+                                raw["distances"][0] if raw["distances"] else [],
+                            )
+                        ],
+                        k=k,
+                    )
+            except Exception as exc:
+                log.warning("Vector retrieval failed, falling back to keyword search: %s", exc)
 
-        embedding = self.model.encode(text).tolist()
-        raw = self.coll.query(
-            query_embeddings=[embedding],
-            n_results=n_results,
-            include=["metadatas", "documents", "distances"],
-        )
-
-        hits: dict[str, Result] = {}
-
-        ids = raw["ids"][0] if raw["ids"] else []
-        distances = raw["distances"][0] if raw["distances"] else []
-
-        for pid, dist in zip(ids, distances):
-            vec_score = max(0.0, 1.0 - float(dist))
-            centrality = self.G.nodes[pid].get("centrality", 0.0) if pid in self.G else 0.0
-            norm_centrality = centrality / self._max_centrality if self._max_centrality else 0.0
-            score = 0.7 * vec_score + 0.3 * norm_centrality
-
-            evidence = list(self._people.get(pid, {}).get("evidence", []))
-            self._append_event_evidence(pid, evidence)
-
-            hits[pid] = Result(person_id=pid, score=score, evidence=evidence)
-
-            # 1-hop: pull direct neighbors that are also people
-            if pid in self.G:
-                for nbr in list(self.G.successors(pid)) + list(self.G.predecessors(pid)):
-                    if nbr in hits:
-                        continue
-                    node_data = self.G.nodes.get(nbr, {})
-                    if node_data.get("type") != "person":
-                        continue
-                    nbr_centrality = node_data.get("centrality", 0.0) / self._max_centrality
-                    # neighbors score lower than the direct hit
-                    nbr_score = 0.7 * vec_score * 0.5 + 0.3 * nbr_centrality
-                    nbr_evidence = list(self._people.get(nbr, {}).get("evidence", []))
-                    self._append_event_evidence(nbr, nbr_evidence)
-                    hits[nbr] = Result(person_id=nbr, score=nbr_score, evidence=nbr_evidence)
-
-        ranked = sorted(hits.values(), key=lambda r: r.score, reverse=True)
-        return ranked[:k]
+        return self._keyword_query(text, k=k)
 
     def subgraph(self, person_ids: list[str], hops: int = 1) -> dict:
         """Return a D3-compatible subgraph dict for the given person IDs."""
@@ -168,3 +184,56 @@ class Retriever:
                 snippet = f"Attended {label}"
                 if snippet not in evidence:
                     evidence.append(snippet)
+
+    def _expand_ranked_hits(self, ranked_hits: list[tuple[str, float]], k: int) -> list[Result]:
+        hits: dict[str, Result] = {}
+
+        for pid, relevance_score in ranked_hits:
+            if pid not in self._people:
+                continue
+
+            centrality = self.G.nodes[pid].get("centrality", 0.0) if pid in self.G else 0.0
+            norm_centrality = centrality / self._max_centrality if self._max_centrality else 0.0
+            score = 0.7 * relevance_score + 0.3 * norm_centrality
+
+            evidence = list(self._people.get(pid, {}).get("evidence", []))
+            self._append_event_evidence(pid, evidence)
+            hits[pid] = Result(person_id=pid, score=score, evidence=evidence)
+
+            if pid in self.G:
+                for nbr in list(self.G.successors(pid)) + list(self.G.predecessors(pid)):
+                    if nbr in hits:
+                        continue
+                    node_data = self.G.nodes.get(nbr, {})
+                    if node_data.get("type") != "person":
+                        continue
+                    nbr_centrality = node_data.get("centrality", 0.0) / self._max_centrality
+                    nbr_score = 0.7 * relevance_score * 0.5 + 0.3 * nbr_centrality
+                    nbr_evidence = list(self._people.get(nbr, {}).get("evidence", []))
+                    self._append_event_evidence(nbr, nbr_evidence)
+                    hits[nbr] = Result(person_id=nbr, score=nbr_score, evidence=nbr_evidence)
+
+        ranked = sorted(hits.values(), key=lambda r: r.score, reverse=True)
+        return ranked[:k]
+
+    def _keyword_query(self, text: str, k: int = 10) -> list[Result]:
+        terms = self._tokenize(text)
+        if not terms:
+            return []
+
+        ranked_hits: list[tuple[str, float]] = []
+        for pid, doc in self._search_docs.items():
+            if not doc:
+                continue
+            matches = sum(1 for term in terms if term in doc)
+            if matches == 0:
+                continue
+            relevance = matches / len(terms)
+            ranked_hits.append((pid, relevance))
+
+        ranked_hits.sort(key=lambda item: item[1], reverse=True)
+        return self._expand_ranked_hits(ranked_hits[: k * 2], k=k)
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        return [token for token in re.findall(r"[a-z0-9]+", text.lower()) if len(token) > 1]

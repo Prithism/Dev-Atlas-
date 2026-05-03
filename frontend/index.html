@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kolkata Dev Atlas</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <p class="eyebrow">COMMUNITY MAP</p>
+        <h1>Kolkata Dev Atlas</h1>
+        <p class="subtitle">Explore people, projects, and events through a clustered network that keeps every graph connection visible while re-grouping around the query.</p>
+      </div>
+
+      <div class="search-panel">
+        <label class="search-label" for="q">Search the atlas</label>
+        <div id="search-container">
+          <input id="q" type="text" placeholder="who mentors ML juniors in kolkata..." autofocus autocomplete="off">
+          <button id="search-btn">Scan Atlas</button>
+        </div>
+        <div class="quick-queries" aria-label="Suggested queries">
+          <button class="quick-query" type="button" data-query="Who works on LangGraph in Kolkata">LangGraph</button>
+          <button class="quick-query" type="button" data-query="Who mentors ML juniors in Kolkata">Mentors</button>
+          <button class="quick-query" type="button" data-query="Show Jadavpur developer network">Jadavpur</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside id="results" class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Signal matches</p>
+            <h2>Relevant nodes</h2>
+          </div>
+          <div id="result-count" class="metric-chip">0 results</div>
+        </div>
+
+        <div id="results-list">
+          <div class="empty-state">Enter a query to light up the network.</div>
+        </div>
+      </aside>
+
+      <section id="graph" class="graph-panel">
+        <div class="graph-grid" aria-hidden="true"></div>
+        <div class="graph-hud">
+          <div class="hud-stack">
+            <div id="graph-state" class="hud-pill">Awaiting query</div>
+            <div id="query-context" class="query-context">Query terms: all signals</div>
+          </div>
+          <div class="hud-metrics">
+            <div class="hud-metric">
+              <span class="hud-label">Nodes</span>
+              <strong id="node-count">0</strong>
+            </div>
+            <div class="hud-metric">
+              <span class="hud-label">Links</span>
+              <strong id="link-count">0</strong>
+            </div>
+          </div>
+        </div>
+
+        <div id="loading" class="hidden">Mapping connections...</div>
+        <div id="viz"></div>
+        <div class="cluster-guides" aria-hidden="true">
+          <div class="cluster-guide" id="cluster-people">
+            <span>People</span>
+            <strong id="cluster-people-count">0 nodes</strong>
+          </div>
+          <div class="cluster-guide" id="cluster-projects">
+            <span>Projects</span>
+            <strong id="cluster-projects-count">0 nodes</strong>
+          </div>
+          <div class="cluster-guide" id="cluster-events">
+            <span>Events</span>
+            <strong id="cluster-events-count">0 nodes</strong>
+          </div>
+        </div>
+
+        <div class="graph-caption">
+          <span>Communities are boxed by type and pulled toward the query's strongest cluster.</span>
+          <span id="focus-label">Focus: none</span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/force-graph"></script>
+  <script src="app.js"></script>
+</body>
+</html>
