@@ -1,0 +1,18 @@
+# Testing
+pytest>=8.0
+
+# Member C — data and graph layer
+networkx>=3.2
+chromadb>=0.5
+sentence-transformers>=2.7
+PyGithub>=2.3
+rapidfuzz>=3.6
+beautifulsoup4>=4.12
+requests>=2.31
+
+# Member A — query agents and FastAPI backend (add here when Member A scaffolds)
+# fastapi
+# uvicorn[standard]
+# anthropic
+
+# Member B — frontend served as static files, no Python deps

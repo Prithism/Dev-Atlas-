@@ -1,1 +1,12 @@
 docs/
+
+# Member C — generated artifacts (rebuild with scripts/build_index.py)
+data/graph.pkl
+data/chroma/
+data/raw/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
