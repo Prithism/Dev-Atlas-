@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -21,7 +23,8 @@ from atlas.retrieval import Result, Retriever
 log = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
-PIPELINE_TIMEOUT = 8.0  # seconds — flip to baseline beyond this
+PIPELINE_TIMEOUT = float(os.getenv("ATLAS_PIPELINE_TIMEOUT_SECONDS", "18.0"))
+JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 # Sprint-day kill switch. Flip True if Parser or Ranker breaks on the day.
 USE_FALLBACK = False
@@ -54,6 +57,61 @@ class ComposedResult:
 # ---------------------------------------------------------------------------
 
 
+def _extract_text_content(message) -> str:
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+    if not content:
+        return ""
+
+    parts: list[str] = []
+    for block in content:
+        text = getattr(block, "text", None)
+        if text is None and isinstance(block, dict):
+            text = block.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+    return "\n".join(parts).strip()
+
+
+def _strip_json_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = JSON_FENCE_RE.sub("", stripped).strip()
+    return stripped
+
+
+def _load_json_payload(text: str):
+    cleaned = _strip_json_fences(text)
+    if not cleaned:
+        raise ValueError("LLM returned empty text payload")
+
+    decoder = json.JSONDecoder()
+    candidates = [cleaned]
+    candidates.extend(
+        cleaned[index:].strip()
+        for index, char in enumerate(cleaned)
+        if char in "[{"
+    )
+
+    last_error: Exception | None = None
+    seen_candidates: set[str] = set()
+
+    for candidate in candidates:
+        if not candidate or candidate in seen_candidates:
+            continue
+        seen_candidates.add(candidate)
+        try:
+            payload, _ = decoder.raw_decode(candidate)
+            return payload
+        except json.JSONDecodeError as exc:
+            last_error = exc
+
+    if last_error:
+        raise last_error
+    raise ValueError("Unable to find JSON payload in LLM response")
+
+
 async def _call(client: anthropic.AsyncAnthropic, prompt: str, max_tokens: int = 512) -> str:
     for attempt in range(2):
         try:
@@ -62,7 +120,10 @@ async def _call(client: anthropic.AsyncAnthropic, prompt: str, max_tokens: int =
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return msg.content[0].text.strip()
+            text = _extract_text_content(msg)
+            if not text:
+                raise ValueError("LLM returned no text content")
+            return text
         except anthropic.RateLimitError:
             if attempt == 0:
                 log.warning("Rate limit hit, retrying in 2s...")
@@ -90,11 +151,27 @@ Return JSON only, no prose:
 }}"""
     try:
         raw = await _call(client, prompt)
-        data = json.loads(raw)
+        data = _load_json_payload(raw)
+        if not isinstance(data, dict):
+            raise ValueError("Parser expected a JSON object")
+
+        skills = data.get("skills", [])
+        if isinstance(skills, str):
+            skills = [skills]
+        skills = [skill.strip() for skill in skills if isinstance(skill, str) and skill.strip()]
+
+        role = data.get("role")
+        if role is not None and not isinstance(role, str):
+            role = str(role).strip() or None
+
+        constraints = data.get("constraints", {})
+        if not isinstance(constraints, dict):
+            constraints = {}
+
         return ParsedQuery(
-            skills=data.get("skills", []),
-            role=data.get("role"),
-            constraints=data.get("constraints", {}),
+            skills=skills,
+            role=role,
+            constraints=constraints,
             raw=q,
         )
     except Exception as exc:
@@ -153,7 +230,21 @@ Return a JSON array of IDs only: ["id1", "id2", "id3", "id4", "id5"]"""
 
     try:
         raw = await _call(client, prompt)
-        ordered_ids: list[str] = json.loads(raw)
+        payload = _load_json_payload(raw)
+        if isinstance(payload, dict):
+            payload = payload.get("ids") or payload.get("ordered_ids") or payload.get("ranking") or []
+        if not isinstance(payload, list):
+            raise ValueError("Ranker expected a JSON array of IDs")
+
+        ordered_ids: list[str] = []
+        for item in payload:
+            if isinstance(item, str) and item.strip():
+                ordered_ids.append(item.strip())
+            elif isinstance(item, dict):
+                candidate_id = item.get("id") or item.get("person_id")
+                if isinstance(candidate_id, str) and candidate_id.strip():
+                    ordered_ids.append(candidate_id.strip())
+
         id_to_result = {r.person_id: r for r in results}
         reranked = [id_to_result[pid] for pid in ordered_ids if pid in id_to_result]
         # keep any results the LLM didn't mention, appended at the end
@@ -204,8 +295,26 @@ Return JSON array only:
     composed_by_id: dict[str, list[str]] = {}
     try:
         raw = await _call(client, prompt, max_tokens=800)
-        for item in json.loads(raw):
-            composed_by_id[item["id"]] = item.get("evidence", [])
+        payload = _load_json_payload(raw)
+        if isinstance(payload, dict):
+            payload = payload.get("results") or payload.get("items") or []
+        if not isinstance(payload, list):
+            raise ValueError("Composer expected a JSON array of results")
+
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            result_id = item.get("id") or item.get("person_id")
+            if not isinstance(result_id, str) or not result_id.strip():
+                continue
+            evidence = item.get("evidence", [])
+            if isinstance(evidence, str):
+                evidence = [evidence]
+            if not isinstance(evidence, list):
+                evidence = []
+            composed_by_id[result_id.strip()] = [
+                bullet.strip() for bullet in evidence if isinstance(bullet, str) and bullet.strip()
+            ]
     except Exception as exc:
         log.warning("Composer failed (%s), using raw evidence", exc)
 

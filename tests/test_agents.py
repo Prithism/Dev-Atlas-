@@ -40,6 +40,18 @@ class TestCall:
         result = await _call(mock_anthropic_client, "prompt")
         assert result == "hello world"
 
+    async def test_joins_multiple_text_blocks(self, mock_anthropic_client):
+        block_one = MagicMock(text="```json")
+        block_two = MagicMock(text='{"skills": ["langgraph"]}')
+        block_three = MagicMock(text="```")
+        mock_message = MagicMock()
+        mock_message.content = [block_one, block_two, block_three]
+        mock_anthropic_client.messages.create = AsyncMock(return_value=mock_message)
+
+        result = await _call(mock_anthropic_client, "prompt")
+
+        assert '{"skills": ["langgraph"]}' in result
+
     async def test_retries_once_on_rate_limit(self, mock_anthropic_client, llm_response):
         import anthropic
 
@@ -88,6 +100,21 @@ class TestParserAgent:
 
         assert result.role == "mentor"
         assert "machine learning" in result.skills
+
+    async def test_extracts_json_from_fenced_prose_response(
+        self, mock_anthropic_client, llm_response
+    ):
+        body = """Here is the structured output:
+
+```json
+{"skills": ["langgraph", "rag"], "role": "engineer", "constraints": {}}
+```"""
+        mock_anthropic_client.messages.create = AsyncMock(return_value=llm_response(body))
+
+        result = await parser_agent(mock_anthropic_client, "who works on langgraph in Kolkata")
+
+        assert result.skills == ["langgraph", "rag"]
+        assert result.role == "engineer"
 
     async def test_falls_back_on_invalid_json(self, mock_anthropic_client, llm_response):
         mock_anthropic_client.messages.create = AsyncMock(
@@ -207,6 +234,21 @@ class TestRankerAgent:
         ids = [r.person_id for r in reranked]
         assert "bob" in ids
 
+    async def test_accepts_wrapped_ranker_payload(
+        self, mock_anthropic_client, mock_retriever, llm_response
+    ):
+        mock_anthropic_client.messages.create = AsyncMock(
+            return_value=llm_response('{"ids": ["bob", "alice"]}')
+        )
+        results = [
+            Result("alice", 0.9, []),
+            Result("bob", 0.7, []),
+        ]
+
+        reranked = await ranker_agent(mock_anthropic_client, "q", results, mock_retriever)
+
+        assert [r.person_id for r in reranked[:2]] == ["bob", "alice"]
+
     async def test_falls_back_to_original_order_on_invalid_json(
         self, mock_anthropic_client, mock_retriever, llm_response
     ):
@@ -290,6 +332,17 @@ class TestComposerAgent:
         composed = await composer_agent(mock_anthropic_client, "q", results, mock_retriever)
 
         assert composed[0].score == round(0.876543, 3)
+
+    async def test_accepts_wrapped_composer_payload_and_string_evidence(
+        self, mock_anthropic_client, mock_retriever, llm_response
+    ):
+        body = '{"results": [{"person_id": "alice", "evidence": "Built Bengali LangGraph tooling"}]}'
+        mock_anthropic_client.messages.create = AsyncMock(return_value=llm_response(body))
+        results = [Result("alice", 0.88, ["raw evidence"])]
+
+        composed = await composer_agent(mock_anthropic_client, "q", results, mock_retriever)
+
+        assert composed[0].evidence == ["Built Bengali LangGraph tooling"]
 
     async def test_returns_empty_for_empty_input(
         self, mock_anthropic_client, mock_retriever
