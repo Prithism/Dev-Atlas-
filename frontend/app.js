@@ -12,6 +12,10 @@ const nodeCount = document.getElementById("node-count");
 const linkCount = document.getElementById("link-count");
 const focusLabel = document.getElementById("focus-label");
 const quickQueryButtons = document.querySelectorAll(".quick-query");
+const API_BASE = window.location.protocol === "file:"
+  ? "http://localhost:8000"
+  : window.location.origin;
+const QUERY_TIMEOUT_MS = 8000;
 
 let graph3d = null;
 let highlightedNodeId = null;
@@ -19,6 +23,7 @@ let currentQuery = "";
 let resizeObserver = null;
 let currentLayout = null;
 let currentModel = null;
+let resizeFitTimer = null;
 let sceneDecor = {
   helpers: [],
   labels: [],
@@ -326,7 +331,7 @@ function buildSearchModel(subgraph, results, query) {
     node.connectedResultCount = connectedResultCount;
     node.resultScore = resultMeta && typeof resultMeta.score === "number" ? resultMeta.score : 0;
     node.queryWeight = rankBoost + scoreBoost + termMatches * 1.7 + connectedResultCount * 0.9 + Math.min(degree, 5) * 0.3;
-    node.visualSize = clamp(5 + node.queryWeight * 1.3, 5, 16);
+    node.visualSize = clamp(7 + node.queryWeight * 1.35, 7, 20);
     node.isResult = resultMap.has(node.id);
 
     communityCounts[node.communityKey] += 1;
@@ -353,30 +358,30 @@ function getLayoutProfile(model) {
   const focus = model.focusCommunity;
   const dense = model.nodes.length > 15;
   const centers = {
-    people: { x: -120, y: 50, z: 0 },
-    projects: { x: 120, y: 40, z: 0 },
-    events: { x: 0, y: -110, z: 0 }
+    people: { x: -170, y: 18, z: 0 },
+    projects: { x: 170, y: 12, z: 0 },
+    events: { x: 0, y: 155, z: 0 }
   };
 
   if (focus === "people") {
-    centers.people = { x: 0, y: 65, z: 20 };
-    centers.projects = { x: 145, y: 10, z: -20 };
-    centers.events = { x: -145, y: -35, z: -30 };
+    centers.people = { x: -10, y: -12, z: 20 };
+    centers.projects = { x: 200, y: 20, z: -20 };
+    centers.events = { x: -185, y: 150, z: -30 };
   } else if (focus === "projects") {
-    centers.projects = { x: 0, y: 55, z: 20 };
-    centers.people = { x: -150, y: 0, z: -25 };
-    centers.events = { x: 150, y: -35, z: -25 };
+    centers.projects = { x: 0, y: -8, z: 20 };
+    centers.people = { x: -205, y: 22, z: -25 };
+    centers.events = { x: 190, y: 158, z: -25 };
   } else if (focus === "events") {
-    centers.events = { x: 0, y: 55, z: 20 };
-    centers.people = { x: -155, y: -20, z: -20 };
-    centers.projects = { x: 155, y: -15, z: -20 };
+    centers.events = { x: 0, y: 18, z: 20 };
+    centers.people = { x: -195, y: 138, z: -20 };
+    centers.projects = { x: 195, y: 138, z: -20 };
   }
 
   return {
     focusCommunity: focus,
-    charge: dense ? -165 : -190,
-    distance: dense ? 52 : 70,
-    clusterPull: dense ? 0.007 : 0.009,
+    charge: dense ? -210 : -250,
+    distance: dense ? 72 : 92,
+    clusterPull: dense ? 0.0085 : 0.011,
     centers
   };
 }
@@ -505,6 +510,105 @@ function truncateLabel(label) {
   return label.length > 18 ? `${label.slice(0, 15)}...` : label;
 }
 
+function getNodeFillColor(node, isHighlighted = false) {
+  if (isHighlighted) return "#141414";
+  if (node.type === "repo") return "#2563eb";
+  if (node.type === "event") return "#ffcf33";
+  return "#ff8d7a";
+}
+
+function getLinkColor(link) {
+  if (isHighlightedLink(link)) return "rgba(255, 93, 115, 0.96)";
+  if (link.isResultBridge) return "rgba(46, 107, 255, 0.8)";
+  return link.isInternalCommunity ? "rgba(20, 20, 20, 0.24)" : "rgba(104, 104, 104, 0.2)";
+}
+
+function getLinkWidth(link) {
+  if (isHighlightedLink(link)) return 3.5;
+  return link.isResultBridge ? 2.3 : 0.95;
+}
+
+function drawNodeCanvas(node, ctx, globalScale) {
+  const isHighlighted = node.id === highlightedNodeId;
+  const theme = getCommunityTheme(node.communityKey);
+  const size = node.visualSize || 6;
+  const label = truncateLabel(node.label || node.id);
+  const fontSize = Math.max(10 / globalScale, 7);
+  const showLabel = isHighlighted || node.isResult || (globalScale > 1.6 && node.queryWeight >= 5.4);
+
+  ctx.save();
+  ctx.translate(node.x, node.y);
+
+  if (node.isResult || isHighlighted) {
+    ctx.beginPath();
+    ctx.fillStyle = isHighlighted ? "rgba(255, 93, 115, 0.24)" : "rgba(46, 107, 255, 0.15)";
+    ctx.arc(0, 0, size * (isHighlighted ? 2.35 : 2.05), 0, 2 * Math.PI, false);
+    ctx.fill();
+  }
+
+  if (node.isResult || node.termMatches) {
+    ctx.strokeStyle = node.isResult ? theme.accent : "#141414";
+    ctx.lineWidth = isHighlighted ? 3 : 1.8;
+    ctx.strokeRect(-(size * 1.9), -(size * 1.9), size * 3.8, size * 3.8);
+  }
+
+  ctx.fillStyle = getNodeFillColor(node, isHighlighted);
+  ctx.strokeStyle = isHighlighted ? COLORS.edgeHighlight : "#141414";
+  ctx.lineWidth = isHighlighted ? 3 : 2;
+
+  if (node.type === "repo") {
+    ctx.beginPath();
+    ctx.rect(-size * 1.15, -size * 1.15, size * 2.3, size * 2.3);
+    ctx.fill();
+    ctx.stroke();
+  } else if (node.type === "event") {
+    ctx.beginPath();
+    ctx.moveTo(0, -size * 1.4);
+    ctx.lineTo(size * 1.2, 0);
+    ctx.lineTo(0, size * 1.4);
+    ctx.lineTo(-size * 1.2, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.arc(0, 0, size, 0, 2 * Math.PI, false);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  ctx.restore();
+
+  if (!showLabel) {
+    return;
+  }
+
+  ctx.font = `700 ${fontSize}px Courier New`;
+  const textWidth = ctx.measureText(label).width;
+  const labelX = node.x + size + 8;
+  const labelY = node.y - size - 2;
+  const labelPaddingX = 5;
+  const labelPaddingY = 3;
+
+  ctx.fillStyle = isHighlighted ? "#ff5d73" : theme.fill;
+  ctx.strokeStyle = isHighlighted ? COLORS.accentWarm : theme.stroke;
+  ctx.lineWidth = 2;
+  ctx.fillRect(
+    labelX - labelPaddingX,
+    labelY - fontSize + labelPaddingY,
+    textWidth + labelPaddingX * 2,
+    fontSize + labelPaddingY * 2
+  );
+  ctx.strokeRect(
+    labelX - labelPaddingX,
+    labelY - fontSize + labelPaddingY,
+    textWidth + labelPaddingX * 2,
+    fontSize + labelPaddingY * 2
+  );
+  ctx.fillStyle = "#141414";
+  ctx.fillText(label, labelX, labelY);
+}
+
 function isHighlightedLink(link) {
   const sourceId = typeof link.source === "object" ? link.source.id : link.source;
   const targetId = typeof link.target === "object" ? link.target.id : link.target;
@@ -512,13 +616,6 @@ function isHighlightedLink(link) {
 }
 
 function cleanupSceneDecor() {
-  if (!graph3d) return;
-
-  const scene = graph3d.scene();
-  [...sceneDecor.helpers, ...sceneDecor.labels, ...sceneDecor.lights].forEach((entry) => {
-    scene.remove(entry);
-  });
-
   sceneDecor = {
     helpers: [],
     labels: [],
@@ -527,44 +624,7 @@ function cleanupSceneDecor() {
 }
 
 function addSceneDecor(layout) {
-  if (!graph3d) return;
-
-  const scene = graph3d.scene();
   cleanupSceneDecor();
-
-  const ambient = new THREE.AmbientLight(0xffffff, 0.95);
-  const front = new THREE.DirectionalLight(0xffffff, 0.75);
-  front.position.set(0, 120, 220);
-  const side = new THREE.DirectionalLight(0xffd84d, 0.42);
-  side.position.set(180, -60, 120);
-  sceneDecor.lights.push(ambient, front, side);
-  scene.add(ambient, front, side);
-
-  COMMUNITY_ORDER.forEach((communityKey) => {
-    const center = layout.centers[communityKey];
-    const theme = getCommunityTheme(communityKey);
-    const frame = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(130, 110, 90)),
-      new THREE.LineBasicMaterial({
-        color: new THREE.Color(layout.focusCommunity === communityKey ? COLORS.accentWarm : theme.accent),
-        transparent: true,
-        opacity: layout.focusCommunity === communityKey ? 0.95 : 0.55
-      })
-    );
-    frame.position.set(center.x, center.y, center.z);
-    sceneDecor.helpers.push(frame);
-    scene.add(frame);
-
-    const label = createLabelSprite(COMMUNITY_NAMES[communityKey], {
-      fontsize: 22,
-      fill: layout.focusCommunity === communityKey ? "#ffffff" : theme.fill,
-      stroke: layout.focusCommunity === communityKey ? COLORS.accentWarm : theme.stroke,
-      textColor: "#141414"
-    });
-    label.position.set(center.x, center.y + 70, center.z);
-    sceneDecor.labels.push(label);
-    scene.add(label);
-  });
 }
 
 function updateCommunityGuides(model) {
@@ -591,6 +651,17 @@ function applyClusterForces(nodes, layout) {
     node.vy = (node.vy || 0) + (anchor.y - (node.y || 0)) * pull;
     node.vz = (node.vz || 0) + (anchor.z - (node.z || 0)) * pull * 0.85;
   });
+}
+
+function fitGraphView(duration = 900, padding = 92) {
+  if (!graph3d) return;
+
+  if (typeof graph3d.zoomToFit === "function") {
+    graph3d.zoomToFit(duration, padding);
+  } else {
+    graph3d.centerAt(0, 30, duration);
+    graph3d.zoom(2.1, duration);
+  }
 }
 
 function renderResults(results) {
@@ -674,80 +745,101 @@ function renderGraph(subgraph, results = [], query = currentQuery) {
   currentLayout = layout;
   vizContainer.innerHTML = "";
 
-  graph3d = ForceGraph3D()(vizContainer)
-    .graphData({ nodes: model.nodes, links: model.links })
-    .backgroundColor("rgba(0,0,0,0)")
-    .showNavInfo(false)
-    .width(vizContainer.clientWidth)
-    .height(vizContainer.clientHeight)
-    .nodeThreeObject(buildNodeObject)
-    .linkColor((link) => {
-      if (isHighlightedLink(link)) return COLORS.edgeHighlight;
-      if (link.isResultBridge) return COLORS.accent;
-      return link.isInternalCommunity ? "#141414" : "#686868";
-    })
-    .linkWidth((link) => {
-      if (isHighlightedLink(link)) return 2.8;
-      return link.isResultBridge ? 1.7 : 0.8;
-    })
-    .linkOpacity(0.95)
-    .linkDirectionalParticles((link) => {
-      if (isHighlightedLink(link)) return 5;
-      return link.isResultBridge ? 2 : 0;
-    })
-    .linkDirectionalParticleWidth((link) => (isHighlightedLink(link) ? 3.5 : 2))
-    .linkDirectionalParticleColor((link) => (isHighlightedLink(link) ? COLORS.edgeHighlight : COLORS.accent))
-    .linkDirectionalParticleSpeed((link) => (isHighlightedLink(link) ? 0.012 : 0.004))
-    .linkLabel((link) => `<span style="color:#f2f2ef;font-family:Courier New,monospace;font-size:11px;">${link.type}</span>`)
-    .onNodeClick((node) => {
-      highlightedNodeId = node.id;
-      syncGraphHighlight();
-      setActiveResultCard(node.id);
-      setFocusLabel(node.label || node.id);
+  if (typeof ForceGraph !== "function") {
+    vizContainer.innerHTML = '<div class="empty-state">Graph view unavailable right now. Results are still usable while the graph library is offline.</div>';
+    setGraphMetrics(model.nodes.length, model.links.length);
+    setGraphStatus("Graph library unavailable");
+    setQueryContext(
+      model.terms.length
+        ? `Query terms: ${model.terms.join(" / ")}`
+        : `Query terms: ${query || "all signals"}`
+    );
+    updateCommunityGuides(model);
+    setLoading(false);
+    return;
+  }
 
-      const card = document.getElementById(`result-${node.id}`);
-      if (card) {
-        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }
+  try {
+    graph3d = ForceGraph()(vizContainer)
+      .graphData({ nodes: model.nodes, links: model.links })
+      .backgroundColor("rgba(0,0,0,0)")
+      .width(vizContainer.clientWidth)
+      .height(vizContainer.clientHeight)
+      .nodeCanvasObject(drawNodeCanvas)
+      .nodeCanvasObjectMode(() => "replace")
+      .nodeLabel((node) => `${node.label || node.id} (${node.type})`)
+      .linkColor(getLinkColor)
+      .linkWidth(getLinkWidth)
+      .linkDirectionalParticles((link) => {
+        if (isHighlightedLink(link)) return 5;
+        return link.isResultBridge ? 2 : 0;
+      })
+      .linkDirectionalParticleWidth((link) => (isHighlightedLink(link) ? 3.5 : 2))
+      .linkDirectionalParticleColor((link) => (isHighlightedLink(link) ? COLORS.edgeHighlight : COLORS.accent))
+      .linkDirectionalParticleSpeed((link) => (isHighlightedLink(link) ? 0.012 : 0.004))
+      .linkLabel((link) => link.type)
+      .onNodeClick((node) => {
+        highlightedNodeId = node.id;
+        syncGraphHighlight();
+        setActiveResultCard(node.id);
+        setFocusLabel(node.label || node.id);
 
-      flyToNode(node);
-    })
-    .onNodeHover((node) => {
-      vizContainer.style.cursor = node ? "pointer" : "default";
-    })
-    .onEngineTick(() => {
-      applyClusterForces(model.nodes, layout);
-    });
+        const card = document.getElementById(`result-${node.id}`);
+        if (card) {
+          card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
 
-  graph3d.d3Force("charge").strength(layout.charge);
-  graph3d.d3Force("link").distance((link) => clamp(layout.distance - link.bridgeStrength * 6, 36, 94));
-  graph3d.d3VelocityDecay(0.26);
-  graph3d.cooldownTicks(120);
-  graph3d.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        flyToNode(node);
+      })
+      .onNodeHover((node) => {
+        vizContainer.style.cursor = node ? "pointer" : "default";
+      })
+      .onEngineTick(() => {
+        applyClusterForces(model.nodes, layout);
+      });
 
-  addSceneDecor(layout);
-  addLegend();
-  updateCommunityGuides(model);
-  setGraphMetrics(model.nodes.length, model.links.length);
-  setGraphStatus(`${results.length} primary matches | ${COMMUNITY_NAMES[layout.focusCommunity]} in focus`);
-  setQueryContext(
-    model.terms.length
-      ? `Query terms: ${model.terms.join(" / ")}`
-      : `Query terms: ${query || "all signals"}`
-  );
-  setLoading(false);
+    graph3d.d3Force("charge").strength(layout.charge);
+    graph3d.d3Force("link").distance((link) => clamp(layout.distance - link.bridgeStrength * 6, 36, 94));
+    graph3d.d3VelocityDecay(0.26);
+    graph3d.cooldownTicks(120);
 
-  const rankedNodes = [...model.nodes].sort((a, b) => b.queryWeight - a.queryWeight);
-  const leadNodeId = results[0]?.id || rankedNodes[0]?.id;
-  let didAutoFocus = false;
+    addSceneDecor(layout);
+    addLegend();
+    updateCommunityGuides(model);
+    setGraphMetrics(model.nodes.length, model.links.length);
+    setGraphStatus(`${results.length} primary matches | ${COMMUNITY_NAMES[layout.focusCommunity]} in focus`);
+    setQueryContext(
+      model.terms.length
+        ? `Query terms: ${model.terms.join(" / ")}`
+        : `Query terms: ${query || "all signals"}`
+    );
+    setLoading(false);
 
-  if (leadNodeId) {
+    const rankedNodes = [...model.nodes].sort((a, b) => b.queryWeight - a.queryWeight);
+    const leadNodeId = results[0]?.id || rankedNodes[0]?.id;
+    let didFitView = false;
+
     graph3d.onEngineStop(() => {
-      if (didAutoFocus) return;
-      didAutoFocus = true;
-      focusOnNode(leadNodeId);
-      setActiveResultCard(leadNodeId);
+      if (didFitView) return;
+      didFitView = true;
+      setFocusLabel("overview");
+      if (leadNodeId) {
+        setActiveResultCard(leadNodeId);
+      }
+      fitGraphView(900, 96);
     });
+  } catch (error) {
+    console.warn("Graph rendering unavailable:", error.message);
+    vizContainer.innerHTML = '<div class="empty-state">Graph rendering is unavailable in this browser session, but the ranked results are ready.</div>';
+    setGraphMetrics(model.nodes.length, model.links.length);
+    setGraphStatus("Graph rendering unavailable");
+    setQueryContext(
+      model.terms.length
+        ? `Query terms: ${model.terms.join(" / ")}`
+        : `Query terms: ${query || "all signals"}`
+    );
+    updateCommunityGuides(model);
+    setLoading(false);
   }
 }
 
@@ -760,16 +852,9 @@ function setActiveResultCard(id) {
 function syncGraphHighlight() {
   if (!graph3d) return;
 
-  graph3d.nodeThreeObject(buildNodeObject);
-  graph3d.linkColor((link) => {
-    if (isHighlightedLink(link)) return COLORS.edgeHighlight;
-    if (link.isResultBridge) return COLORS.accent;
-    return link.isInternalCommunity ? "#141414" : "#686868";
-  });
-  graph3d.linkWidth((link) => {
-    if (isHighlightedLink(link)) return 2.8;
-    return link.isResultBridge ? 1.7 : 0.8;
-  });
+  graph3d.nodeCanvasObject(drawNodeCanvas);
+  graph3d.linkColor(getLinkColor);
+  graph3d.linkWidth(getLinkWidth);
   graph3d.linkDirectionalParticles((link) => {
     if (isHighlightedLink(link)) return 5;
     return link.isResultBridge ? 2 : 0;
@@ -777,24 +862,20 @@ function syncGraphHighlight() {
   graph3d.linkDirectionalParticleWidth((link) => (isHighlightedLink(link) ? 3.5 : 2));
   graph3d.linkDirectionalParticleColor((link) => (isHighlightedLink(link) ? COLORS.edgeHighlight : COLORS.accent));
   graph3d.linkDirectionalParticleSpeed((link) => (isHighlightedLink(link) ? 0.012 : 0.004));
+  if (typeof graph3d.refresh === "function") {
+    graph3d.refresh();
+  }
 }
 
 function flyToNode(node) {
   if (!graph3d || !node) return;
 
-  const distance = 105;
-  const safeMagnitude = Math.max(1, Math.hypot(node.x || 0, node.y || 0, node.z || 0));
-  const ratio = 1 + distance / safeMagnitude;
-
-  graph3d.cameraPosition(
-    {
-      x: (node.x || 0) * ratio,
-      y: (node.y || 0) * ratio,
-      z: (node.z || 0) * ratio + 10
-    },
-    node,
-    1000
-  );
+  if (typeof graph3d.centerAt === "function") {
+    graph3d.centerAt(node.x || 0, node.y || 0, 1000);
+  }
+  if (typeof graph3d.zoom === "function") {
+    graph3d.zoom(node.isResult ? 4.5 : 3.5, 1000);
+  }
 }
 
 function focusOnNode(id) {
@@ -833,7 +914,8 @@ function addLegend() {
 function handleResize() {
   if (!graph3d) return;
   graph3d.width(vizContainer.clientWidth).height(vizContainer.clientHeight);
-  graph3d.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  window.clearTimeout(resizeFitTimer);
+  resizeFitTimer = window.setTimeout(() => fitGraphView(0, 96), 120);
 }
 
 async function handleSearch() {
@@ -851,11 +933,16 @@ async function handleSearch() {
   setGraphMetrics(0, 0);
   resultsList.innerHTML = '<div class="empty-state">Reading query and regrouping communities...</div>';
 
+  let timeoutId = null;
+
   try {
-    const response = await fetch("http://localhost:8000/query", {
+    const controller = new AbortController();
+    timeoutId = window.setTimeout(() => controller.abort(), QUERY_TIMEOUT_MS);
+    const response = await fetch(`${API_BASE}/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q: query })
+      body: JSON.stringify({ q: query }),
+      signal: controller.signal
     });
 
     if (!response.ok) {
@@ -873,6 +960,10 @@ async function handleSearch() {
       renderResults(data.results);
       renderGraph(data.subgraph, data.results, rawQuery);
     }, 260);
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
   }
 }
 

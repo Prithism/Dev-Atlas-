@@ -1,13 +1,16 @@
 """
 5-pass data collection pipeline. Run this BEFORE the sprint.
-Requires: GH_TOKEN environment variable (GitHub personal access token).
+Requires:
+    - GH_TOKEN in the repo .env file (GitHub personal access token)
+    - GEMINI_API_KEY in the repo .env file (Google AI Studio API key)
 
 Usage:
-    export GH_TOKEN=ghp_...
+    GH_TOKEN=ghp_...          # in .env
+    GEMINI_API_KEY=...        # in .env
     python scripts/ingest.py
 
 Passes:
-    1. Seed list from data/seeds.csv
+    1. Harvester agent: free web crawl -> raw seed candidates
     2. GitHub search expansion (location:Kolkata etc.)
     3. Network expansion via seed followers/following
     4. Event cross-reference via public attendee lists
@@ -16,7 +19,6 @@ Passes:
 
 from __future__ import annotations
 
-import csv
 import json
 import os
 import sys
@@ -24,10 +26,16 @@ import time
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 from rapidfuzz import fuzz
 
 try:
-    from github import Github, RateLimitExceededException
+    from .harvester_agent import HarvesterAgent
+except ImportError:
+    from harvester_agent import HarvesterAgent
+
+try:
+    from github import Auth, Github, RateLimitExceededException
 except ImportError:
     print("ERROR: pip install PyGithub")
     sys.exit(1)
@@ -35,29 +43,26 @@ except ImportError:
 DATA_DIR = Path("data")
 RAW_DIR = DATA_DIR / "raw"
 
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
 GH_TOKEN = os.getenv("GH_TOKEN")
 if not GH_TOKEN:
-    print("ERROR: set GH_TOKEN environment variable")
+    print("ERROR: set GH_TOKEN in .env")
     sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
-# Pass 1: seed list
+# Pass 1: Harvester agent
 # ---------------------------------------------------------------------------
 
-def load_seeds(path: Path = DATA_DIR / "seeds.csv") -> list[dict]:
+def harvest_seeds() -> list[dict]:
     """
-    Expects CSV with columns: name, github_handle, primary_signal
-    Example: Rishiraj Acharya, rishiraj, GDG organizer
+    Harvest public seed candidates using the PRD-style Harvester agent.
+    Returns records with the same shape the network expansion expects:
+    name, github_handle, primary_signal.
     """
-    if not path.exists():
-        print(f"No seeds file at {path}. Create it from the manual spreadsheet first.")
-        return []
-    seeds = []
-    with open(path) as f:
-        for row in csv.DictReader(f):
-            seeds.append(row)
-    print(f"[Pass 1] Loaded {len(seeds)} seeds from {path}")
+    seeds = HarvesterAgent().run()
+    print(f"[Pass 1] Prepared {len(seeds)} seeds for network expansion")
     return seeds
 
 
@@ -305,6 +310,14 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
             f.write(json.dumps(r) + "\n")
 
 
+def _get_core_rate_limit(g: Github):
+    rate_limit = g.get_rate_limit()
+    resources = getattr(rate_limit, "resources", None)
+    if resources is not None:
+        return resources.core
+    return rate_limit.core
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -312,11 +325,12 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
 def main() -> None:
     DATA_DIR.mkdir(exist_ok=True)
 
-    g = Github(GH_TOKEN)
+    g = Github(auth=Auth.Token(GH_TOKEN))
+    core_rate = _get_core_rate_limit(g)
     print(f"Authenticated as: {g.get_user().login}")
-    print(f"Rate limit remaining: {g.get_rate_limit().core.remaining}/5000\n")
+    print(f"Rate limit remaining: {core_rate.remaining}/{core_rate.limit}\n")
 
-    seeds = load_seeds()
+    seeds = harvest_seeds()
     raw_users = fetch_github_users(g)
     all_users = expand_via_networks(g, seeds, raw_users)
     extra_edges = crossref_events(all_users)

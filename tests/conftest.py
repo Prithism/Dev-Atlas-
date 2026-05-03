@@ -150,3 +150,97 @@ def mock_model():
     model = MagicMock()
     model.encode.return_value = np.zeros(384)
     return model
+
+
+# ---------------------------------------------------------------------------
+# Agent / API layer fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_retriever():
+    """
+    MagicMock Retriever pre-configured with realistic return values.
+    Used by test_agents.py and test_api.py.
+    """
+    from unittest.mock import MagicMock
+    from atlas.retrieval import Result, Retriever
+
+    r = MagicMock(spec=Retriever)
+
+    r.query.return_value = [
+        Result(person_id="alice", score=0.88, evidence=["GDG Cloud 2024 speaker"]),
+        Result(person_id="bob", score=0.72, evidence=["JU PhD, Bengali NLP"]),
+        Result(person_id="charlie", score=0.55, evidence=[]),
+    ]
+
+    r.subgraph.return_value = {
+        "nodes": [
+            {"id": "alice", "label": "Alice Roy", "type": "person", "centrality": 0.4},
+            {"id": "bob", "label": "Bob Das", "type": "person", "centrality": 0.3},
+        ],
+        "edges": [{"src": "alice", "dst": "bob", "type": "follows"}],
+    }
+
+    r.get_person.side_effect = lambda pid: {
+        "alice": {
+            "id": "alice",
+            "name": "Alice Roy",
+            "bio": "ML engineer building LangGraph pipelines",
+            "languages": ["Python"],
+            "followers": 100,
+            "url": "https://github.com/alice",
+            "evidence": ["GDG Cloud 2024 speaker"],
+        },
+        "bob": {
+            "id": "bob",
+            "name": "Bob Das",
+            "bio": "NLP researcher, Bengali language models",
+            "languages": ["Python"],
+            "followers": 50,
+            "url": "https://github.com/bob",
+            "evidence": ["JU PhD"],
+        },
+        "charlie": {
+            "id": "charlie",
+            "name": "Charlie Sen",
+            "bio": "Backend Go engineer",
+            "languages": ["Go"],
+            "followers": 30,
+            "url": "https://github.com/charlie",
+            "evidence": [],
+        },
+    }.get(pid, {})
+
+    return r
+
+
+@pytest.fixture
+def llm_response():
+    """
+    Factory that returns a mock anthropic Message with a given text body.
+    Usage: mock_client.messages.create = AsyncMock(return_value=llm_response("..."))
+    """
+    from unittest.mock import MagicMock
+
+    def _make(text: str):
+        msg = MagicMock()
+        msg.content = [MagicMock(text=text)]
+        return msg
+
+    return _make
+
+
+@pytest.fixture
+def mock_anthropic_client(llm_response):
+    """
+    AsyncAnthropic mock whose messages.create returns a configurable response.
+    Default response is a valid composer JSON array.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    import anthropic
+
+    client = MagicMock(spec=anthropic.AsyncAnthropic)
+    default_body = '[{"id": "alice", "evidence": ["LangGraph engineer in Kolkata"]}]'
+    client.messages.create = AsyncMock(return_value=llm_response(default_body))
+    return client

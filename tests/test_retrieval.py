@@ -138,6 +138,24 @@ class TestRetrieverQuery:
         assert alice is not None
         assert len(alice.evidence) > 0
 
+    def test_keyword_fallback_works_when_embedding_model_unavailable(self, tmp_data_dir, mock_chroma_collection):
+        mock_client = MagicMock()
+        mock_client.get_collection.return_value = mock_chroma_collection
+
+        with (
+            patch("atlas.retrieval.chromadb.PersistentClient", return_value=mock_client),
+            patch("atlas.retrieval.SentenceTransformer", side_effect=RuntimeError("offline")),
+        ):
+            r = Retriever(
+                graph_path=str(tmp_data_dir / "graph.pkl"),
+                chroma_path=str(tmp_data_dir / "chroma"),
+            )
+
+        results = r.query("langgraph bengali", k=5)
+
+        assert results
+        assert results[0].person_id == "alice"
+
 
 # ---------------------------------------------------------------------------
 # Retriever.subgraph
