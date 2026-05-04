@@ -15,7 +15,7 @@ const quickQueryButtons = document.querySelectorAll(".quick-query");
 const API_BASE = window.location.protocol === "file:"
   ? "http://localhost:8000"
   : window.location.origin;
-const QUERY_TIMEOUT_MS = 8000;
+const QUERY_TIMEOUT_MS = 45000;
 
 let graph3d = null;
 let highlightedNodeId = null;
@@ -918,6 +918,29 @@ function handleResize() {
   resizeFitTimer = window.setTimeout(() => fitGraphView(0, 96), 120);
 }
 
+function setDataSourceBadge(source) {
+  let badge = document.getElementById("data-source-badge");
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.id = "data-source-badge";
+    badge.style.cssText = [
+      "position:fixed", "bottom:16px", "right:16px", "z-index:999",
+      "padding:6px 14px", "font:700 11px/1 'Courier New',monospace",
+      "border:2px solid #141414", "letter-spacing:.06em", "text-transform:uppercase"
+    ].join(";");
+    document.body.appendChild(badge);
+  }
+  if (source === "live") {
+    badge.textContent = "● Live data";
+    badge.style.background = "#d4f5d4";
+    badge.style.color = "#141414";
+  } else {
+    badge.textContent = "○ Demo data";
+    badge.style.background = "#fff3bf";
+    badge.style.color = "#141414";
+  }
+}
+
 async function handleSearch() {
   const rawQuery = qInput.value.trim();
   const query = rawQuery.toLowerCase();
@@ -946,14 +969,19 @@ async function handleSearch() {
     });
 
     if (!response.ok) {
-      throw new Error("Backend not available");
+      const detail = await response.text().catch(() => response.statusText);
+      throw new Error(`Backend error ${response.status}: ${detail}`);
     }
 
     const data = await response.json();
+    setDataSourceBadge("live");
     renderResults(data.results || []);
     renderGraph(data.subgraph, data.results || [], rawQuery);
   } catch (error) {
-    console.log("Falling back to mock data:", error.message);
+    const isTimeout = error.name === "AbortError";
+    const reason = isTimeout ? "request timed out after 45s" : error.message;
+    console.warn(`Backend unavailable (${reason}), showing demo data`);
+    setDataSourceBadge("demo");
     const data = pickMockData(query);
 
     setTimeout(() => {

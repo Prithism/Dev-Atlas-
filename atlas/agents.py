@@ -23,7 +23,6 @@ from atlas.retrieval import Result, Retriever
 log = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
-PIPELINE_TIMEOUT = float(os.getenv("ATLAS_PIPELINE_TIMEOUT_SECONDS", "18.0"))
 JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 # Sprint-day kill switch. Flip True if Parser or Ranker breaks on the day.
@@ -346,21 +345,16 @@ async def run_pipeline(
 ) -> dict:
     """
     Full 4-agent pipeline.
-    Falls back to 2-agent baseline on timeout or when USE_FALLBACK is True.
+    Falls back to 2-agent baseline when USE_FALLBACK is True.
     """
     if USE_FALLBACK:
         log.info("USE_FALLBACK=True, skipping Parser and Ranker")
         return await run_fallback(q, retriever, client)
 
-    try:
-        async with asyncio.timeout(PIPELINE_TIMEOUT):
-            parsed = await parser_agent(client, q)
-            raw_results = retriever_step(parsed, retriever, k=15)
-            ranked = await ranker_agent(client, q, raw_results, retriever)
-            composed = await composer_agent(client, q, ranked[:5], retriever)
-    except TimeoutError:
-        log.warning("Pipeline exceeded %.1fs timeout, falling back to baseline", PIPELINE_TIMEOUT)
-        return await run_fallback(q, retriever, client)
+    parsed = await parser_agent(client, q)
+    raw_results = retriever_step(parsed, retriever, k=15)
+    ranked = await ranker_agent(client, q, raw_results, retriever)
+    composed = await composer_agent(client, q, ranked[:5], retriever)
 
     if not composed:
         return _empty_response(q)

@@ -419,23 +419,23 @@ class TestRunPipeline:
         # Parser and Ranker should NOT have been called (only 1 LLM call for Composer)
         assert mock_anthropic_client.messages.create.call_count == 1
 
-    async def test_falls_back_to_baseline_on_timeout(
+    async def test_full_pipeline_runs_all_four_agents(
         self, mock_anthropic_client, mock_retriever, llm_response, monkeypatch
     ):
-        monkeypatch.setattr(agents_module, "PIPELINE_TIMEOUT", 0.01)
         monkeypatch.setattr(agents_module, "USE_FALLBACK", False)
 
-        async def slow_parser(client, q):
-            await asyncio.sleep(5)
-
-        monkeypatch.setattr(agents_module, "parser_agent", slow_parser)
-        mock_anthropic_client.messages.create = AsyncMock(
-            return_value=llm_response('[{"id": "alice", "evidence": ["x"]}]')
-        )
+        responses = [
+            llm_response('{"skills": ["python"], "role": null, "constraints": {}}'),
+            llm_response('["alice"]'),
+            llm_response('[{"id": "alice", "evidence": ["x"]}]'),
+        ]
+        mock_anthropic_client.messages.create = AsyncMock(side_effect=responses)
 
         result = await run_pipeline("q", mock_retriever, mock_anthropic_client)
 
-        assert "results" in result  # fallback still returns a valid response
+        # Parser + Ranker + Composer = 3 LLM calls
+        assert mock_anthropic_client.messages.create.call_count == 3
+        assert "results" in result
 
     async def test_empty_retrieval_returns_message(
         self, mock_anthropic_client, mock_retriever, llm_response, monkeypatch
