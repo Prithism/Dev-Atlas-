@@ -22,9 +22,11 @@
   padding: 0;
 }
 
+/* Lock to viewport on desktop — no page scroll */
 html,
 body {
-  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
@@ -36,13 +38,12 @@ body {
     var(--bg);
   background-size: auto, auto, 32px 32px, 32px 32px, auto;
   color: var(--ink);
-  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-  overflow-x: hidden;
-  overflow-y: auto;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
 }
 
 .app-shell {
-  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
   padding: 18px;
   display: flex;
   flex-direction: column;
@@ -59,10 +60,14 @@ body {
 }
 
 .topbar {
+  flex-shrink: 0;
+  /* Hard cap: topbar never exceeds 27 % of viewport, leaving workspace ≥ 73 % */
+  max-height: min(210px, 27vh);
+  overflow: hidden;
   display: grid;
   grid-template-columns: minmax(280px, 1.18fr) minmax(330px, 1fr);
   gap: 18px;
-  padding: 22px;
+  padding: 16px 22px;
   background: linear-gradient(135deg, var(--panel-3), #ffe588);
 }
 
@@ -81,16 +86,15 @@ body {
 .panel-kicker,
 .search-label,
 .hud-label,
-.cluster-guide span,
 .query-context,
 .result-score,
 .metric-chip,
 .graph-legend,
 #focus-label,
 #loading {
-  font-family: "Courier New", Courier, monospace;
+  font-family: "JetBrains Mono", "Courier New", monospace;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
 }
 
 .eyebrow {
@@ -100,8 +104,8 @@ body {
 }
 
 h1 {
-  font-size: clamp(2.3rem, 3.6vw, 4rem);
-  line-height: 0.9;
+  font-size: clamp(1.9rem, 2.8vw, 3.2rem);
+  line-height: 0.92;
   font-weight: 900;
   text-transform: uppercase;
   max-width: 12ch;
@@ -110,8 +114,13 @@ h1 {
 .subtitle {
   max-width: 44rem;
   color: #222222;
-  line-height: 1.45;
-  font-size: 0.98rem;
+  line-height: 1.4;
+  font-size: 0.92rem;
+  /* Never let the subtitle push the topbar taller than its max-height */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .search-panel {
@@ -137,8 +146,7 @@ h1 {
 }
 
 #q,
-#search-btn,
-.quick-query {
+#search-btn {
   min-height: 52px;
   border: 3px solid var(--ink);
   border-radius: 18px;
@@ -163,8 +171,7 @@ h1 {
   border-color: var(--accent);
 }
 
-#search-btn,
-.quick-query {
+#search-btn {
   cursor: pointer;
   font-weight: 800;
   text-transform: uppercase;
@@ -177,54 +184,36 @@ h1 {
   box-shadow: 4px 4px 0 var(--ink);
 }
 
-#search-btn:hover,
-.quick-query:hover {
+#search-btn:hover {
   transform: translate(-2px, -2px);
   box-shadow: 6px 6px 0 var(--ink);
 }
 
-.quick-queries {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
 
-.quick-query {
-  min-height: 40px;
-  padding: 0 14px;
-  background: var(--paper);
-}
-
-.quick-query:nth-child(2n) {
-  background: var(--panel-5);
-}
-
-.quick-query:nth-child(3n) {
-  background: #ffd1e1;
-}
-
+/* Workspace fills all remaining height — no overflow */
 .workspace {
+  flex: 1 1 0;
   min-height: 0;
-  flex: 1 0 auto;
+  overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(310px, 390px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
   gap: 18px;
-  align-items: stretch;
 }
 
-.panel,
-.graph-panel {
-  min-height: 0;
-}
-
+/* Panels fill workspace height — internal scroll for results list */
 .panel {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   background: #ffffff;
-  min-height: clamp(420px, 62vh, 900px);
+  border: 3px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
 .panel-header {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -257,7 +246,7 @@ h1 {
 }
 
 #results-list {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -288,6 +277,7 @@ h1 {
 }
 
 .result-card {
+  flex-shrink: 0;
   padding: 16px;
   border: 3px solid var(--ink);
   border-radius: 18px;
@@ -367,17 +357,18 @@ h1 {
   color: #3c3c3c;
   text-decoration: none;
   word-break: break-all;
-  font-family: "Courier New", Courier, monospace;
-  font-size: 0.8rem;
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 0.76rem;
 }
 
 .result-url:hover {
   color: var(--accent);
 }
 
+/* Graph panel — fills workspace column, canvas area sized via absolute children */
 .graph-panel {
   position: relative;
-  min-height: clamp(520px, 72vh, 980px);
+  min-height: 0;
   overflow: hidden;
   background:
     radial-gradient(circle at 14% 18%, rgba(255, 216, 77, 0.55), transparent 18%),
@@ -397,13 +388,18 @@ h1 {
   position: absolute;
 }
 
+/*
+ * Viz canvas area — leave room for:
+ *   top:    HUD (~95px) + 8px gap = 103px
+ *   bottom: caption (16px line-height + padding + border) ~ 64px
+ */
 .graph-grid,
 #viz {
-  left: 18px;
-  right: 18px;
-  top: 118px;
-  bottom: 146px;
-  border-radius: 26px;
+  left: 16px;
+  right: 16px;
+  top: 103px;
+  bottom: 64px;
+  border-radius: 20px;
 }
 
 .graph-grid {
@@ -419,9 +415,9 @@ h1 {
 
 .graph-hud {
   z-index: 4;
-  top: 16px;
-  left: 16px;
-  right: 16px;
+  top: 14px;
+  left: 14px;
+  right: 14px;
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -467,7 +463,7 @@ h1 {
 }
 
 .hud-metric {
-  min-width: 92px;
+  min-width: 72px;
   padding: 10px 12px;
   background: rgba(237, 244, 255, 0.94);
 }
@@ -475,6 +471,11 @@ h1 {
 .hud-metric:nth-child(2) {
   background: rgba(255, 230, 223, 0.94);
 }
+
+/* Cluster count chips — reuse hud-metric base, override colour per type */
+#cluster-people   { background: rgba(255, 230, 223, 0.94); }
+#cluster-projects { background: rgba(237, 244, 255, 0.94); }
+#cluster-events   { background: rgba(255, 243, 191, 0.96); }
 
 .hud-label {
   display: block;
@@ -488,56 +489,12 @@ h1 {
   font-size: 1.2rem;
 }
 
-.cluster-guides {
-  z-index: 3;
-  left: 16px;
-  right: 16px;
-  bottom: 84px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  pointer-events: none;
-}
-
-.cluster-guide {
-  padding: 12px;
-  border: 3px solid var(--ink);
-  border-radius: 18px;
-  box-shadow: 4px 4px 0 var(--ink);
-  background: rgba(255, 255, 255, 0.88);
-  min-width: 0;
-  overflow: hidden;
-}
-
-#cluster-people {
-  background: #ffe6df;
-}
-
-#cluster-projects {
-  background: #edf4ff;
-}
-
-#cluster-events {
-  background: #fff3bf;
-}
-
-.cluster-guide span {
-  display: block;
-  color: var(--muted);
-  font-size: 0.62rem;
-  margin-bottom: 6px;
-  font-weight: 700;
-}
-
-.cluster-guide strong {
-  display: block;
-  font-size: 1.25rem;
-  line-height: 1.1;
-}
-
-.cluster-guide.active {
-  transform: translate(-2px, -2px);
-  box-shadow: 7px 7px 0 var(--ink);
+/* Active cluster chip in the HUD */
+#cluster-people.active,
+#cluster-projects.active,
+#cluster-events.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 #loading {
@@ -571,13 +528,13 @@ h1 {
 
 .graph-caption {
   z-index: 4;
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 10px 14px;
   background: #ffffff;
   border: 3px solid var(--ink);
   border-radius: 18px;
@@ -585,6 +542,7 @@ h1 {
   color: var(--muted);
   line-height: 1.45;
   pointer-events: none;
+  font-size: 0.82rem;
 }
 
 #focus-label {
@@ -597,26 +555,27 @@ h1 {
 .graph-tooltip {
   position: absolute;
   background: #ffffff;
-  border: 3px solid var(--ink);
-  border-radius: 14px;
-  box-shadow: 4px 4px 0 var(--ink);
-  padding: 8px 10px;
-  font-size: 12px;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 var(--ink);
+  padding: 6px 10px;
+  font-size: 11px;
   pointer-events: none;
-  font-family: "Courier New", Courier, monospace;
+  font-family: "JetBrains Mono", monospace;
   color: var(--ink);
   z-index: 10;
   white-space: nowrap;
 }
 
+/* Legend sits inside top-left of the viz area */
 .graph-legend {
   position: absolute;
-  left: 16px;
-  top: 124px;
+  left: 24px;
+  top: 111px;
   z-index: 4;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   pointer-events: none;
 }
 
@@ -624,23 +583,24 @@ h1 {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 5px 8px;
   background: rgba(255, 255, 255, 0.92);
-  border: 3px solid var(--ink);
-  border-radius: 14px;
-  box-shadow: 4px 4px 0 var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 3px 3px 0 var(--ink);
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 700;
   min-width: 0;
 }
 
 .legend-swatch {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   display: inline-block;
   border: 2px solid var(--ink);
   background: #ff8d7a;
+  flex-shrink: 0;
 }
 
 .legend-swatch.repo {
@@ -652,9 +612,24 @@ h1 {
   transform: rotate(45deg);
 }
 
+/* ── Responsive ─────────────────────────────────────────────────── */
+
+/* Below 1080 px: stack layout, unlock scroll */
 @media (max-width: 1080px) {
+  html,
+  body {
+    height: auto;
+    overflow: auto;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
   .app-shell {
+    height: auto;
     min-height: 100dvh;
+    overflow: visible;
   }
 
   .topbar,
@@ -663,23 +638,25 @@ h1 {
   }
 
   .workspace {
-    grid-template-rows: auto auto;
+    flex: none;
     min-height: auto;
+    overflow: visible;
+    grid-template-rows: auto auto;
   }
 
   .panel {
-    max-height: none;
-    min-height: 360px;
+    min-height: 380px;
+    max-height: 520px;
   }
 
   .graph-panel {
-    min-height: 700px;
+    min-height: 660px;
   }
 
   .graph-grid,
   #viz {
-    top: 132px;
-    bottom: 176px;
+    top: 120px;
+    bottom: 64px;
   }
 }
 
@@ -689,17 +666,15 @@ h1 {
     gap: 12px;
   }
 
-  .topbar,
+  .topbar {
+    padding: 18px 14px;
+  }
+
   .panel-header,
   .graph-hud,
   .graph-caption {
     padding-left: 14px;
     padding-right: 14px;
-  }
-
-  .topbar {
-    padding-top: 18px;
-    padding-bottom: 18px;
   }
 
   .search-panel {
@@ -710,76 +685,48 @@ h1 {
     grid-template-columns: 1fr;
   }
 
-  .workspace {
-    grid-template-rows: auto auto;
+  .panel {
+    min-height: 320px;
+    max-height: 440px;
   }
 
   .panel-header,
-  .graph-hud,
-  .graph-caption {
+  .graph-hud {
     flex-direction: column;
     align-items: start;
   }
 
-  .hud-metrics,
-  .quick-queries,
-  .cluster-guides {
-    width: 100%;
+  .graph-caption {
+    flex-direction: row;
+    flex-wrap: wrap;
   }
 
-  .panel {
-    min-height: auto;
+  .hud-metrics {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   #results-list {
-    overflow-y: visible;
-  }
-
-  .quick-query {
-    flex: 1 1 calc(50% - 10px);
-    text-align: center;
+    overflow-y: auto;
   }
 
   .graph-panel {
-    min-height: 740px;
+    min-height: 600px;
   }
 
   .graph-grid,
   #viz {
-    left: 12px;
-    right: 12px;
-    top: 192px;
-    bottom: 184px;
-  }
-
-  .cluster-guides {
-    left: 12px;
-    right: 12px;
-    bottom: 110px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .cluster-guide {
-    padding: 10px 8px;
-    border-radius: 16px;
-    box-shadow: 3px 3px 0 var(--ink);
-  }
-
-  .cluster-guide span {
-    font-size: 0.54rem;
-    margin-bottom: 4px;
-  }
-
-  .cluster-guide strong {
-    font-size: 0.98rem;
+    left: 10px;
+    right: 10px;
+    top: 148px;
+    bottom: 56px;
   }
 
   .graph-caption {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
-    padding: 10px 12px;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    padding: 8px 12px;
     gap: 6px;
   }
 

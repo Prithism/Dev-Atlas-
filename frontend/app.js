@@ -11,7 +11,6 @@ const queryContext = document.getElementById("query-context");
 const nodeCount = document.getElementById("node-count");
 const linkCount = document.getElementById("link-count");
 const focusLabel = document.getElementById("focus-label");
-const quickQueryButtons = document.querySelectorAll(".quick-query");
 const API_BASE = window.location.protocol === "file:"
   ? "http://localhost:8000"
   : window.location.origin;
@@ -24,47 +23,23 @@ let resizeObserver = null;
 let currentLayout = null;
 let currentModel = null;
 let resizeFitTimer = null;
-let sceneDecor = {
-  helpers: [],
-  labels: [],
-  lights: []
-};
 
-const COLORS = {
-  person: 0xff8d7a,
-  repo: 0x2563eb,
-  event: 0xffd84d,
-  neutral: 0x7d7d7d,
-  ink: "#141414",
-  accent: "#2e6bff",
-  accentWarm: "#ff5d73",
-  edge: "#1f1f1f",
-  edgeHighlight: "#ff5d73"
-};
+// Edge colours (still used by link particle callbacks)
+const EDGE_HIGHLIGHT = "#ff5d73";
+const EDGE_ACCENT    = "#3b82f6";
 
 const COMMUNITY_ORDER = ["people", "projects", "events"];
 const COMMUNITY_NAMES = {
-  people: "PEOPLE",
+  people:   "PEOPLE",
   projects: "PROJECTS",
-  events: "EVENTS"
+  events:   "EVENTS"
 };
 
-const COMMUNITY_THEMES = {
-  people: {
-    fill: "#ffe6df",
-    stroke: "#141414",
-    accent: "#ff8d7a"
-  },
-  projects: {
-    fill: "#edf4ff",
-    stroke: "#141414",
-    accent: "#2563eb"
-  },
-  events: {
-    fill: "#fff3bf",
-    stroke: "#141414",
-    accent: "#ffcf33"
-  }
+// Node visual palette — used in drawNodeCanvas
+const NODE_PALETTE = {
+  person:  { fill: "#fb7185", stroke: "#f43f5e", glowI: "rgba(251,113,133,0.35)", glowO: "rgba(251,113,133,0)" },
+  repo:    { fill: "#60a5fa", stroke: "#3b82f6", glowI: "rgba(96,165,250,0.30)",  glowO: "rgba(96,165,250,0)"  },
+  event:   { fill: "#fbbf24", stroke: "#f59e0b", glowI: "rgba(251,191,36,0.35)",  glowO: "rgba(251,191,36,0)"  },
 };
 
 const STOP_WORDS = new Set([
@@ -262,10 +237,6 @@ function getCommunityKey(node) {
   return "people";
 }
 
-function getCommunityTheme(communityKey) {
-  return COMMUNITY_THEMES[communityKey] || COMMUNITY_THEMES.people;
-}
-
 function getIntentProfile(query, model) {
   const lowerQuery = normalizeText(query);
   const scores = {
@@ -349,7 +320,7 @@ function buildSearchModel(subgraph, results, query) {
     link.isInternalCommunity = sourceNode?.communityKey === targetNode?.communityKey;
   });
 
-  const model = { nodes, links, terms, resultMap, nodeById, communityCounts };
+  const model = { nodes, links, terms, resultMap, nodeById, communityCounts, adjacency };
   model.focusCommunity = getIntentProfile(query, model);
   return model;
 }
@@ -357,256 +328,248 @@ function buildSearchModel(subgraph, results, query) {
 function getLayoutProfile(model) {
   const focus = model.focusCommunity;
   const dense = model.nodes.length > 15;
+
+  // Scale cluster separation to actual canvas size so nodes spread across 70% of canvas
+  const W = vizContainer.clientWidth  || 700;
+  const H = vizContainer.clientHeight || 420;
+  const hx = Math.round(W * 0.38);   // horizontal offset (~38 % of width)
+  const vy = Math.round(H * 0.36);   // vertical   offset (~36 % of height)
+
+  // Default: triangle layout — people left, projects right, events bottom-centre
   const centers = {
-    people: { x: -170, y: 18, z: 0 },
-    projects: { x: 170, y: 12, z: 0 },
-    events: { x: 0, y: 155, z: 0 }
+    people:   { x: -hx, y: -Math.round(vy * 0.20), z: 0 },
+    projects: { x:  hx, y: -Math.round(vy * 0.20), z: 0 },
+    events:   { x:   0, y:  vy,                     z: 0 }
   };
 
+  // Focus variant: pull the dominant cluster to centre, push others to the wings
   if (focus === "people") {
-    centers.people = { x: -10, y: -12, z: 20 };
-    centers.projects = { x: 200, y: 20, z: -20 };
-    centers.events = { x: -185, y: 150, z: -30 };
+    centers.people   = { x:    0, y: -Math.round(vy * 0.25), z: 0 };
+    centers.projects = { x:   hx, y:  Math.round(vy * 0.15), z: 0 };
+    centers.events   = { x:  -hx, y:  vy,                    z: 0 };
   } else if (focus === "projects") {
-    centers.projects = { x: 0, y: -8, z: 20 };
-    centers.people = { x: -205, y: 22, z: -25 };
-    centers.events = { x: 190, y: 158, z: -25 };
+    centers.projects = { x:    0, y: -Math.round(vy * 0.25), z: 0 };
+    centers.people   = { x:  -hx, y:  Math.round(vy * 0.15), z: 0 };
+    centers.events   = { x:   hx, y:  vy,                    z: 0 };
   } else if (focus === "events") {
-    centers.events = { x: 0, y: 18, z: 20 };
-    centers.people = { x: -195, y: 138, z: -20 };
-    centers.projects = { x: 195, y: 138, z: -20 };
+    centers.events   = { x:   0, y:    0, z: 0 };
+    centers.people   = { x: -hx, y:   vy, z: 0 };
+    centers.projects = { x:  hx, y:   vy, z: 0 };
   }
 
   return {
     focusCommunity: focus,
-    charge: dense ? -210 : -250,
-    distance: dense ? 72 : 92,
-    clusterPull: dense ? 0.0085 : 0.011,
+    // Stronger repulsion so nodes within each cluster spread out more
+    charge:      dense ? -420 : -520,
+    // Longer link rest-length — keeps connected nodes readable
+    distance:    dense ?  115 :  145,
+    // clusterPull is used by the D3 force (applied with alpha)
+    clusterPull: dense ? 0.10 : 0.13,
     centers
   };
 }
 
 function seedNodePositions(model, layout) {
-  model.nodes.forEach((node, index) => {
-    const anchor = layout.centers[node.communityKey] || layout.centers.people;
-    const offset = 26 + (node.queryWeight * 2.4);
-    const angle = (index + 1) * 1.7;
-
-    node.x = anchor.x + Math.cos(angle) * offset;
-    node.y = anchor.y + Math.sin(angle) * offset * 0.65;
-    node.z = (node.isResult ? 28 : -12) + ((index % 5) - 2) * 12;
-  });
-}
-
-function createLabelSprite(text, opts = {}) {
-  const fontsize = opts.fontsize || 26;
-  const textColor = opts.textColor || "#f2f2ef";
-  const fill = opts.fill || "#000000";
-  const stroke = opts.stroke || "#f2f2ef";
-
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  context.font = `700 ${fontsize}px Courier New`;
-  const textWidth = context.measureText(text).width;
-
-  canvas.width = textWidth + 40;
-  canvas.height = fontsize + 26;
-
-  context.fillStyle = fill;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = stroke;
-  context.lineWidth = 3;
-  context.strokeRect(1.5, 1.5, canvas.width - 3, canvas.height - 3);
-  context.font = `700 ${fontsize}px Courier New`;
-  context.fillStyle = textColor;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillText(text, canvas.width / 2, canvas.height / 2);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  const material = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    depthWrite: false
+  // Group nodes by their cluster so each group fans out evenly around its anchor
+  const byCluster = {};
+  model.nodes.forEach((node) => {
+    const key = node.communityKey;
+    if (!byCluster[key]) byCluster[key] = [];
+    byCluster[key].push(node);
   });
 
-  const sprite = new THREE.Sprite(material);
-  sprite.scale.set(canvas.width / 5.5, canvas.height / 5.5, 1);
-  return sprite;
-}
+  for (const [key, nodes] of Object.entries(byCluster)) {
+    const anchor = layout.centers[key] || layout.centers.people;
+    // Use concentric rings: inner ring holds result nodes, outer rings hold neighbours
+    const resultNodes = nodes.filter((n) => n.isResult);
+    const otherNodes  = nodes.filter((n) => !n.isResult);
+    const allOrdered  = [...resultNodes, ...otherNodes];
+    // Ring capacity: sqrt gives organic-looking distribution
+    const ringSize    = Math.max(Math.ceil(Math.sqrt(allOrdered.length)), 1);
 
-function getNodeMaterialColor(node, isHighlighted) {
-  if (isHighlighted) return 0x141414;
-  if (node.type === "repo") return COLORS.repo;
-  if (node.type === "event") return COLORS.event;
-  return COLORS.person;
-}
-
-function buildNodeObject(node) {
-  const isHighlighted = node.id === highlightedNodeId;
-  const group = new THREE.Group();
-  const baseColor = getNodeMaterialColor(node, isHighlighted);
-  const theme = getCommunityTheme(node.communityKey);
-  const size = node.visualSize || 6;
-  let geometry;
-
-  if (node.type === "repo") {
-    geometry = new THREE.BoxGeometry(size * 1.45, size * 1.45, size * 1.45);
-  } else if (node.type === "event") {
-    geometry = new THREE.OctahedronGeometry(size * 1.1, 0);
-  } else {
-    geometry = new THREE.SphereGeometry(size, 16, 16);
+    allOrdered.forEach((node, i) => {
+      const ring   = Math.floor(i / ringSize);
+      const count  = Math.min(ringSize, allOrdered.length - ring * ringSize);
+      // Offset start angle per ring to avoid line-up artifacts
+      const offset = ring % 2 === 0 ? 0 : Math.PI / count;
+      const angle  = offset + (2 * Math.PI * (i % ringSize)) / count;
+      // Larger initial radius so nodes are already spread before the simulation runs
+      const radius = 72 + ring * 100;
+      node.x = anchor.x + Math.cos(angle) * radius;
+      node.y = anchor.y + Math.sin(angle) * radius * 0.82;
+      node.vx = 0;
+      node.vy = 0;
+      node.z  = 0;
+    });
   }
-
-  const core = new THREE.Mesh(
-    geometry,
-    new THREE.MeshStandardMaterial({
-      color: baseColor,
-      metalness: 0.06,
-      roughness: 0.72,
-      emissive: node.isResult ? baseColor : 0x000000,
-      emissiveIntensity: node.isResult ? 0.08 : 0
-    })
-  );
-  group.add(core);
-
-  const outline = new THREE.Mesh(
-    geometry.clone(),
-    new THREE.MeshBasicMaterial({
-      color: isHighlighted ? 0xff5d73 : 0x141414,
-      wireframe: true,
-      transparent: true,
-      opacity: isHighlighted ? 1 : 0.72
-    })
-  );
-  outline.scale.setScalar(isHighlighted ? 1.16 : 1.09);
-  group.add(outline);
-
-  if (node.isResult || node.termMatches) {
-    const frame = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(size * 3, size * 3, size * 3)),
-      new THREE.LineBasicMaterial({
-        color: node.isResult ? new THREE.Color(theme.accent) : 0x141414,
-        transparent: true,
-        opacity: isHighlighted ? 1 : 0.46
-      })
-    );
-    group.add(frame);
-  }
-
-  const label = createLabelSprite(truncateLabel(node.label || node.id), {
-    fontsize: isHighlighted ? 30 : 24,
-    fill: isHighlighted ? "#ff5d73" : theme.fill,
-    stroke: theme.stroke,
-    textColor: "#141414"
-  });
-  label.position.set(0, -(size * 2.05), 0);
-  group.add(label);
-
-  return group;
 }
 
 function truncateLabel(label) {
-  return label.length > 18 ? `${label.slice(0, 15)}...` : label;
+  return label.length > 22 ? `${label.slice(0, 19)}…` : label;
 }
 
-function getNodeFillColor(node, isHighlighted = false) {
-  if (isHighlighted) return "#141414";
-  if (node.type === "repo") return "#2563eb";
-  if (node.type === "event") return "#ffcf33";
-  return "#ff8d7a";
-}
-
-function getLinkColor(link) {
-  if (isHighlightedLink(link)) return "rgba(255, 93, 115, 0.96)";
-  if (link.isResultBridge) return "rgba(46, 107, 255, 0.8)";
-  return link.isInternalCommunity ? "rgba(20, 20, 20, 0.24)" : "rgba(104, 104, 104, 0.2)";
-}
-
-function getLinkWidth(link) {
-  if (isHighlightedLink(link)) return 3.5;
-  return link.isResultBridge ? 2.3 : 0.95;
+// Draw a rounded rectangle path (no fill/stroke — caller does that)
+function roundedRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y,     x + w, y + r,     r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x,     y + h, x,     y + h - r, r);
+  ctx.lineTo(x,     y + r);
+  ctx.arcTo(x,     y,     x + r, y,         r);
+  ctx.closePath();
 }
 
 function drawNodeCanvas(node, ctx, globalScale) {
-  const isHighlighted = node.id === highlightedNodeId;
-  const theme = getCommunityTheme(node.communityKey);
-  const size = node.visualSize || 6;
-  const label = truncateLabel(node.label || node.id);
-  const fontSize = Math.max(10 / globalScale, 7);
-  const showLabel = isHighlighted || node.isResult || (globalScale > 1.6 && node.queryWeight >= 5.4);
+  const isSelected  = node.id === highlightedNodeId;
+  const hasFocus    = highlightedNodeId !== null;
+  // Neighbours of the currently selected node (bidirectional, built in buildSearchModel)
+  const neighbors   = hasFocus ? (currentModel?.adjacency?.get(highlightedNodeId) || new Set()) : new Set();
+  const isConnected = hasFocus && neighbors.has(node.id);
+  // Dim everything that has no relation to the selection
+  const dimmed      = hasFocus && !isSelected && !isConnected;
+
+  const size = node.visualSize || 7;
+  const p    = NODE_PALETTE[node.type] || NODE_PALETTE.person;
 
   ctx.save();
+  ctx.globalAlpha = dimmed ? 0.12 : 1.0;
   ctx.translate(node.x, node.y);
 
-  if (node.isResult || isHighlighted) {
+  // ── Glow ──────────────────────────────────────────────────────────
+  if (isSelected) {
+    // Strong warm glow behind selected node
+    const g = ctx.createRadialGradient(0, 0, size * 0.5, 0, 0, size * 3.6);
+    g.addColorStop(0, "rgba(255, 93, 115, 0.55)");
+    g.addColorStop(0.45, "rgba(255, 93, 115, 0.18)");
+    g.addColorStop(1,    "rgba(255, 93, 115, 0)");
+    ctx.fillStyle = g;
     ctx.beginPath();
-    ctx.fillStyle = isHighlighted ? "rgba(255, 93, 115, 0.24)" : "rgba(46, 107, 255, 0.15)";
-    ctx.arc(0, 0, size * (isHighlighted ? 2.35 : 2.05), 0, 2 * Math.PI, false);
+    ctx.arc(0, 0, size * 3.6, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (node.isResult && !hasFocus) {
+    // Subtle type-coloured glow for result nodes at rest
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, size * 2.6);
+    g.addColorStop(0, p.glowI);
+    g.addColorStop(1, p.glowO);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 2.6, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  if (node.isResult || node.termMatches) {
-    ctx.strokeStyle = node.isResult ? theme.accent : "#141414";
-    ctx.lineWidth = isHighlighted ? 3 : 1.8;
-    ctx.strokeRect(-(size * 1.9), -(size * 1.9), size * 3.8, size * 3.8);
-  }
-
-  ctx.fillStyle = getNodeFillColor(node, isHighlighted);
-  ctx.strokeStyle = isHighlighted ? COLORS.edgeHighlight : "#141414";
-  ctx.lineWidth = isHighlighted ? 3 : 2;
+  // ── Node body ──────────────────────────────────────────────────────
+  ctx.fillStyle   = isSelected ? "#0f0f1a" : p.fill;
+  ctx.strokeStyle = isSelected ? "#ff5d73" : (isConnected ? "#ffffff" : p.stroke);
+  ctx.lineWidth   = (isSelected ? 2.5 : isConnected ? 2.2 : 1.4) / globalScale;
 
   if (node.type === "repo") {
-    ctx.beginPath();
-    ctx.rect(-size * 1.15, -size * 1.15, size * 2.3, size * 2.3);
+    // Rounded square
+    const s = size * 1.08;
+    const r = s * 0.32;
+    roundedRect(ctx, -s, -s, s * 2, s * 2, r);
     ctx.fill();
     ctx.stroke();
+    // Three horizontal lines → "code file" icon
+    ctx.strokeStyle = isSelected ? "#ff5d73" : "rgba(255,255,255,0.55)";
+    ctx.lineWidth = 1.2 / globalScale;
+    ctx.lineCap = "round";
+    for (let i = -1; i <= 1; i++) {
+      const lw = i === 0 ? s * 0.7 : s * 0.45;
+      ctx.beginPath();
+      ctx.moveTo(-lw, i * s * 0.38);
+      ctx.lineTo( lw, i * s * 0.38);
+      ctx.stroke();
+    }
   } else if (node.type === "event") {
+    // Diamond
+    const d = size * 1.22;
     ctx.beginPath();
-    ctx.moveTo(0, -size * 1.4);
-    ctx.lineTo(size * 1.2, 0);
-    ctx.lineTo(0, size * 1.4);
-    ctx.lineTo(-size * 1.2, 0);
+    ctx.moveTo(0,    -d);
+    ctx.lineTo(d * 0.82,  0);
+    ctx.lineTo(0,     d);
+    ctx.lineTo(-d * 0.82, 0);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
-  } else {
+    // Star-dot inside
+    ctx.fillStyle = isSelected ? "#ff5d73" : "rgba(255,255,255,0.6)";
     ctx.beginPath();
-    ctx.arc(0, 0, size, 0, 2 * Math.PI, false);
+    ctx.arc(0, 0, d * 0.22, 0, Math.PI * 2);
     ctx.fill();
+  } else {
+    // Person: circle with a minimal head+shoulders hint
+    ctx.beginPath();
+    ctx.arc(0, 0, size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // Head dot + shoulder arc
+    ctx.fillStyle   = isSelected ? "#ff5d73" : "rgba(255,255,255,0.5)";
+    ctx.strokeStyle = isSelected ? "#ff5d73" : "rgba(255,255,255,0.4)";
+    ctx.lineWidth   = 1 / globalScale;
+    ctx.beginPath();
+    ctx.arc(0, -size * 0.22, size * 0.26, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, size * 0.55, size * 0.52, Math.PI, 0);
     ctx.stroke();
   }
 
-  ctx.restore();
-
-  if (!showLabel) {
-    return;
+  // ── Selection orbit ring ───────────────────────────────────────────
+  if (isSelected) {
+    ctx.strokeStyle = "#ff5d73";
+    ctx.lineWidth   = 1.5 / globalScale;
+    ctx.globalAlpha = 0.7;
+    ctx.setLineDash([5 / globalScale, 4 / globalScale]);
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 2.2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = dimmed ? 0.12 : 1.0;
   }
 
-  ctx.font = `700 ${fontSize}px Courier New`;
-  const textWidth = ctx.measureText(label).width;
-  const labelX = node.x + size + 8;
-  const labelY = node.y - size - 2;
-  const labelPaddingX = 5;
-  const labelPaddingY = 3;
+  // ── Label ─────────────────────────────────────────────────────────
+  const showLabel = isSelected || node.isResult || (globalScale > 2.0 && node.degree > 0);
+  if (showLabel) {
+    const label    = truncateLabel(node.label || node.id);
+    const fontSize = clamp(11 / globalScale, 8.5, 13);
+    ctx.font       = `600 ${fontSize}px Inter, system-ui, sans-serif`;
+    const tw   = ctx.measureText(label).width;
+    const padX = 7  / globalScale;
+    const padY = 4  / globalScale;
+    const bw   = tw + padX * 2;
+    const bh   = fontSize + padY * 2;
+    const bx   = size + 7 / globalScale;
+    const by   = -bh / 2;
+    const br   = Math.min(bh * 0.38, 5 / globalScale);
 
-  ctx.fillStyle = isHighlighted ? "#ff5d73" : theme.fill;
-  ctx.strokeStyle = isHighlighted ? COLORS.accentWarm : theme.stroke;
-  ctx.lineWidth = 2;
-  ctx.fillRect(
-    labelX - labelPaddingX,
-    labelY - fontSize + labelPaddingY,
-    textWidth + labelPaddingX * 2,
-    fontSize + labelPaddingY * 2
-  );
-  ctx.strokeRect(
-    labelX - labelPaddingX,
-    labelY - fontSize + labelPaddingY,
-    textWidth + labelPaddingX * 2,
-    fontSize + labelPaddingY * 2
-  );
-  ctx.fillStyle = "#141414";
-  ctx.fillText(label, labelX, labelY);
+    ctx.shadowColor = "rgba(0,0,0,0.18)";
+    ctx.shadowBlur  = 5 / globalScale;
+    ctx.fillStyle   = isSelected ? "rgba(15,15,26,0.94)" : "rgba(255,255,255,0.93)";
+    roundedRect(ctx, bx, by, bw, bh, br);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = isSelected ? "#ffd84d" : "#111827";
+    ctx.fillText(label, bx + padX, by + padY + fontSize * 0.83);
+  }
+
+  ctx.restore();
+}
+
+function getLinkColor(link) {
+  if (isHighlightedLink(link)) return "rgba(255, 93, 115, 0.95)";
+  if (link.isResultBridge) return "rgba(59, 130, 246, 0.72)";
+  if (highlightedNodeId) return "rgba(80, 80, 80, 0.08)"; // dim unrelated links on selection
+  return link.isInternalCommunity ? "rgba(20, 20, 20, 0.22)" : "rgba(110, 110, 110, 0.16)";
+}
+
+function getLinkWidth(link) {
+  if (isHighlightedLink(link)) return 2.8;
+  return link.isResultBridge ? 1.8 : 0.8;
 }
 
 function isHighlightedLink(link) {
@@ -615,52 +578,28 @@ function isHighlightedLink(link) {
   return highlightedNodeId && (sourceId === highlightedNodeId || targetId === highlightedNodeId);
 }
 
-function cleanupSceneDecor() {
-  sceneDecor = {
-    helpers: [],
-    labels: [],
-    lights: []
-  };
-}
-
-function addSceneDecor(layout) {
-  cleanupSceneDecor();
-}
 
 function updateCommunityGuides(model) {
   COMMUNITY_ORDER.forEach((communityKey) => {
-    const guide = document.getElementById(`cluster-${communityKey}`);
+    const chip  = document.getElementById(`cluster-${communityKey}`);
     const count = document.getElementById(`cluster-${communityKey}-count`);
-    if (guide) {
-      guide.classList.toggle("active", model.focusCommunity === communityKey);
+    if (chip) {
+      chip.classList.toggle("active", model.focusCommunity === communityKey);
     }
     if (count) {
-      count.textContent = `${model.communityCounts[communityKey] || 0} nodes`;
+      count.textContent = String(model.communityCounts[communityKey] || 0);
     }
   });
 }
 
-function applyClusterForces(nodes, layout) {
-  nodes.forEach((node) => {
-    const anchor = layout.centers[node.communityKey] || layout.centers.people;
-    const emphasis = node.isResult ? 1.45 : 1;
-    const weight = 0.45 + (node.queryWeight / 10);
-    const pull = layout.clusterPull * emphasis * weight;
-
-    node.vx = (node.vx || 0) + (anchor.x - (node.x || 0)) * pull;
-    node.vy = (node.vy || 0) + (anchor.y - (node.y || 0)) * pull;
-    node.vz = (node.vz || 0) + (anchor.z - (node.z || 0)) * pull * 0.85;
-  });
-}
-
-function fitGraphView(duration = 900, padding = 92) {
+function fitGraphView(duration = 900, padding = 64) {
   if (!graph3d) return;
 
   if (typeof graph3d.zoomToFit === "function") {
     graph3d.zoomToFit(duration, padding);
   } else {
-    graph3d.centerAt(0, 30, duration);
-    graph3d.zoom(2.1, duration);
+    graph3d.centerAt(0, 0, duration);
+    graph3d.zoom(1.8, duration);
   }
 }
 
@@ -761,7 +700,6 @@ function renderGraph(subgraph, results = [], query = currentQuery) {
 
   try {
     graph3d = ForceGraph()(vizContainer)
-      .graphData({ nodes: model.nodes, links: model.links })
       .backgroundColor("rgba(0,0,0,0)")
       .width(vizContainer.clientWidth)
       .height(vizContainer.clientHeight)
@@ -775,7 +713,7 @@ function renderGraph(subgraph, results = [], query = currentQuery) {
         return link.isResultBridge ? 2 : 0;
       })
       .linkDirectionalParticleWidth((link) => (isHighlightedLink(link) ? 3.5 : 2))
-      .linkDirectionalParticleColor((link) => (isHighlightedLink(link) ? COLORS.edgeHighlight : COLORS.accent))
+      .linkDirectionalParticleColor((link) => (isHighlightedLink(link) ? EDGE_HIGHLIGHT : EDGE_ACCENT))
       .linkDirectionalParticleSpeed((link) => (isHighlightedLink(link) ? 0.012 : 0.004))
       .linkLabel((link) => link.type)
       .onNodeClick((node) => {
@@ -794,16 +732,40 @@ function renderGraph(subgraph, results = [], query = currentQuery) {
       .onNodeHover((node) => {
         vizContainer.style.cursor = node ? "pointer" : "default";
       })
-      .onEngineTick(() => {
-        applyClusterForces(model.nodes, layout);
-      });
+      .warmupTicks(80)    // pre-run 80 ticks synchronously — nodes arrive pre-clustered
+      .cooldownTicks(320) // keep animating until clusters fully settle
+      .graphData({ nodes: model.nodes, links: model.links });
 
+    // ── D3 force tuning ───────────────────────────────────────────────
+    // Disable the built-in center force — it fights cluster positioning
+    graph3d.d3Force("center", null);
+
+    // Strong repulsion so nodes within each cluster spread out
     graph3d.d3Force("charge").strength(layout.charge);
-    graph3d.d3Force("link").distance((link) => clamp(layout.distance - link.bridgeStrength * 6, 36, 94));
-    graph3d.d3VelocityDecay(0.26);
-    graph3d.cooldownTicks(120);
 
-    addSceneDecor(layout);
+    // Longer link rest-length keeps connected pairs readable
+    graph3d.d3Force("link").distance(
+      (link) => clamp(layout.distance - link.bridgeStrength * 10, 60, 200)
+    );
+
+    // Cluster force: pull each node toward its group anchor, scaled by alpha
+    // (alpha starts at 1 and cools toward 0, so the pull naturally fades as the simulation settles)
+    const clusterCenters = layout.centers;
+    const clusterPull    = layout.clusterPull;
+    graph3d.d3Force("cluster", (alpha) => {
+      model.nodes.forEach((node) => {
+        const anchor   = clusterCenters[node.communityKey] || clusterCenters.people;
+        // Result nodes are pulled harder so they stay front-and-centre in their cluster
+        const emphasis = node.isResult ? 1.6 : 1.0;
+        const k        = clusterPull * alpha * emphasis;
+        node.vx = (node.vx || 0) + (anchor.x - (node.x || 0)) * k;
+        node.vy = (node.vy || 0) + (anchor.y - (node.y || 0)) * k;
+      });
+    });
+
+    // Higher decay = faster settling, less overshooting
+    graph3d.d3VelocityDecay(0.38);
+
     addLegend();
     updateCommunityGuides(model);
     setGraphMetrics(model.nodes.length, model.links.length);
@@ -826,7 +788,7 @@ function renderGraph(subgraph, results = [], query = currentQuery) {
       if (leadNodeId) {
         setActiveResultCard(leadNodeId);
       }
-      fitGraphView(900, 96);
+      fitGraphView(900, 64);
     });
   } catch (error) {
     console.warn("Graph rendering unavailable:", error.message);
@@ -851,17 +813,17 @@ function setActiveResultCard(id) {
 
 function syncGraphHighlight() {
   if (!graph3d) return;
-
+  // Re-register callbacks so they close over the latest highlightedNodeId
   graph3d.nodeCanvasObject(drawNodeCanvas);
   graph3d.linkColor(getLinkColor);
   graph3d.linkWidth(getLinkWidth);
   graph3d.linkDirectionalParticles((link) => {
-    if (isHighlightedLink(link)) return 5;
-    return link.isResultBridge ? 2 : 0;
+    if (isHighlightedLink(link)) return 4;
+    return link.isResultBridge ? 1 : 0;
   });
-  graph3d.linkDirectionalParticleWidth((link) => (isHighlightedLink(link) ? 3.5 : 2));
-  graph3d.linkDirectionalParticleColor((link) => (isHighlightedLink(link) ? COLORS.edgeHighlight : COLORS.accent));
-  graph3d.linkDirectionalParticleSpeed((link) => (isHighlightedLink(link) ? 0.012 : 0.004));
+  graph3d.linkDirectionalParticleWidth((link) => (isHighlightedLink(link) ? 3 : 1.8));
+  graph3d.linkDirectionalParticleColor((link) => (isHighlightedLink(link) ? EDGE_HIGHLIGHT : EDGE_ACCENT));
+  graph3d.linkDirectionalParticleSpeed((link) => (isHighlightedLink(link) ? 0.01 : 0.004));
   if (typeof graph3d.refresh === "function") {
     graph3d.refresh();
   }
@@ -869,12 +831,12 @@ function syncGraphHighlight() {
 
 function flyToNode(node) {
   if (!graph3d || !node) return;
-
+  // Centre on the node without zooming in too aggressively
   if (typeof graph3d.centerAt === "function") {
-    graph3d.centerAt(node.x || 0, node.y || 0, 1000);
+    graph3d.centerAt(node.x || 0, node.y || 0, 700);
   }
   if (typeof graph3d.zoom === "function") {
-    graph3d.zoom(node.isResult ? 4.5 : 3.5, 1000);
+    graph3d.zoom(2.8, 700);
   }
 }
 
@@ -915,7 +877,7 @@ function handleResize() {
   if (!graph3d) return;
   graph3d.width(vizContainer.clientWidth).height(vizContainer.clientHeight);
   window.clearTimeout(resizeFitTimer);
-  resizeFitTimer = window.setTimeout(() => fitGraphView(0, 96), 120);
+  resizeFitTimer = window.setTimeout(() => fitGraphView(0, 64), 120);
 }
 
 function setDataSourceBadge(source) {
@@ -924,9 +886,10 @@ function setDataSourceBadge(source) {
     badge = document.createElement("div");
     badge.id = "data-source-badge";
     badge.style.cssText = [
-      "position:fixed", "bottom:16px", "right:16px", "z-index:999",
+      "position:fixed", "top:14px", "right:14px", "z-index:999",
       "padding:6px 14px", "font:700 11px/1 'Courier New',monospace",
-      "border:2px solid #141414", "letter-spacing:.06em", "text-transform:uppercase"
+      "border:2px solid #141414", "letter-spacing:.06em", "text-transform:uppercase",
+      "border-radius:12px", "pointer-events:none"
     ].join(";");
     document.body.appendChild(badge);
   }
@@ -1000,18 +963,13 @@ qInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") handleSearch();
 });
 
-quickQueryButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    qInput.value = button.dataset.query || "";
-    handleSearch();
-  });
-});
-
 window.addEventListener("resize", handleResize);
 
 window.addEventListener("DOMContentLoaded", () => {
   resizeObserver = new ResizeObserver(() => handleResize());
   resizeObserver.observe(vizContainer);
   qInput.value = "Who works on LangGraph in Kolkata";
-  handleSearch();
+  // Defer by one animation frame so CSS layout is fully computed before
+  // getLayoutProfile() reads vizContainer.clientWidth / clientHeight
+  requestAnimationFrame(() => handleSearch());
 });

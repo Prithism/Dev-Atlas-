@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Kolkata Dev Atlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,11 +23,6 @@
         <div id="search-container">
           <input id="q" type="text" placeholder="who mentors ML juniors in kolkata..." autofocus autocomplete="off">
           <button id="search-btn">Scan Atlas</button>
-        </div>
-        <div class="quick-queries" aria-label="Suggested queries">
-          <button class="quick-query" type="button" data-query="Who works on LangGraph in Kolkata">LangGraph</button>
-          <button class="quick-query" type="button" data-query="Who mentors ML juniors in Kolkata">Mentors</button>
-          <button class="quick-query" type="button" data-query="Show Jadavpur developer network">Jadavpur</button>
         </div>
       </div>
     </header>
@@ -60,28 +58,26 @@
               <span class="hud-label">Links</span>
               <strong id="link-count">0</strong>
             </div>
+            <div class="hud-metric" id="cluster-people">
+              <span class="hud-label">People</span>
+              <strong id="cluster-people-count">0</strong>
+            </div>
+            <div class="hud-metric" id="cluster-projects">
+              <span class="hud-label">Projects</span>
+              <strong id="cluster-projects-count">0</strong>
+            </div>
+            <div class="hud-metric" id="cluster-events">
+              <span class="hud-label">Events</span>
+              <strong id="cluster-events-count">0</strong>
+            </div>
           </div>
         </div>
 
         <div id="loading" class="hidden">Mapping connections...</div>
         <div id="viz"></div>
-        <div class="cluster-guides" aria-hidden="true">
-          <div class="cluster-guide" id="cluster-people">
-            <span>People</span>
-            <strong id="cluster-people-count">0 nodes</strong>
-          </div>
-          <div class="cluster-guide" id="cluster-projects">
-            <span>Projects</span>
-            <strong id="cluster-projects-count">0 nodes</strong>
-          </div>
-          <div class="cluster-guide" id="cluster-events">
-            <span>Events</span>
-            <strong id="cluster-events-count">0 nodes</strong>
-          </div>
-        </div>
 
         <div class="graph-caption">
-          <span>Communities are boxed by type and pulled toward the query's strongest cluster.</span>
+          <span>● people &nbsp; ■ repos &nbsp; ◆ events — click any node to focus</span>
           <span id="focus-label">Focus: none</span>
         </div>
       </section>
