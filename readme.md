@@ -65,7 +65,7 @@ The pipeline is fully resilient: if the LLM-powered Parser or Ranker agents fail
 | Who mentors ML juniors in Kolkata? | Mentor/educator network |
 | Show Jadavpur developer network | University alumni cluster |
 
-These three queries are also available as quick-launch buttons in the UI and are backed by mock data, so the frontend works even with the backend offline.
+These three queries are also available as quick-launch buttons in the UI and execute against the live backend. If the backend is unavailable, the UI now shows the failure instead of masking it with canned demo results.
 
 ---
 
@@ -138,7 +138,7 @@ scripts/build_index.py  ──► data/graph.pkl  +  data/chroma/
 | Graph store | NetworkX DiGraph + PageRank (`networkx`) |
 | Vector index | ChromaDB persistent (cosine space) |
 | Embeddings | `all-MiniLM-L6-v2` via `sentence-transformers` |
-| Data ingest | PyGithub, `requests`, `beautifulsoup4`, `rapidfuzz` |
+| Data ingest | GitHub REST API via `requests`, `beautifulsoup4`, `rapidfuzz` |
 | Harvester LLM | Google Gemini via `GEMINI_API_KEY` |
 | Frontend | Vanilla JS, 3d-force-graph, Three.js |
 | Testing | pytest, pytest-asyncio, httpx |
@@ -255,9 +255,9 @@ The ingest script runs a 5-pass data collection pipeline:
 | Pass | What it does |
 |---|---|
 | 1 | Harvester agent: Gemini-powered free-web crawl for seed candidates |
-| 2 | GitHub search expansion (`location:Kolkata`, `location:"West Bengal"`, etc.) |
-| 3 | Network expansion via seed followers/following (2+ shared-network filter) |
-| 4 | Event cross-reference — fuzzy-match attendee lists against collected users |
+| 2 | Seed hydration + paginated GitHub search expansion (`location:Kolkata`, `location:"West Bengal"`, etc.) |
+| 3 | Network expansion via seed followers/following with retained `follows` edges |
+| 4 | Repo contributor graph + optional event cross-reference |
 | 5 | Schema normalisation → `people.jsonl`, `repos.jsonl`, `edges.jsonl` |
 
 ```bash
@@ -417,7 +417,7 @@ curl -s -X POST http://localhost:8000/query \
 The frontend is a **single-page app** — plain JavaScript, no build step, no Node.js required.
 
 - `frontend/index.html` — app shell with topbar search, results panel, and 3-D graph canvas
-- `frontend/app.js` — search handler, force-graph rendering, live/demo data switching
+- `frontend/app.js` — search handler, force-graph rendering, and live backend error states
 - `frontend/style.css` — neo-brutalist design system (CSS variables, high-contrast palette)
 
 **How it works:**
@@ -425,8 +425,8 @@ The frontend is a **single-page app** — plain JavaScript, no build step, no No
 1. On page load, the app fires an automatic search for *"Who works on LangGraph in Kolkata"*
 2. Posts to `http://localhost:8000/query` and waits up to **45 seconds** for the LLM pipeline to respond
 3. Renders ranked cards in the left panel and an interactive force graph on the right
-4. A **● Live data** / **○ Demo data** badge (bottom-right corner) always shows which source is active
-5. If the backend is unreachable or returns an error, the app falls back to built-in `MOCK_DATA` for the three demo queries so the UI is always functional
+4. A status badge in the top-right corner shows whether live data is loading, active, or failed
+5. If the backend is unreachable or returns an error, the UI surfaces the failure so you know the atlas is not using live GitHub-backed results
 
 **Quick-launch buttons** at the top pre-fill and run the three canonical demo queries instantly.
 
