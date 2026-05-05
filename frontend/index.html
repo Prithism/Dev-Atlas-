@@ -3,23 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Query the Kolkata developer community — ranked people, evidence, and an interactive network graph.">
   <title>Kolkata Dev Atlas</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
       <div class="brand-block">
-        <p class="eyebrow">COMMUNITY MAP</p>
+        <p class="eyebrow">Community Map</p>
         <h1>Kolkata Dev Atlas</h1>
-        <p class="subtitle">Explore people, projects, and events through a clustered network that keeps every graph connection visible while re-grouping around the query.</p>
+        <p class="subtitle">Query the Kolkata developer community — ranked people, evidence, and an interactive network graph.</p>
       </div>
 
       <div class="search-panel">
-        <label class="search-label" for="q">Search the atlas</label>
+        <div class="search-panel-header">
+          <label class="search-label" for="q">Search the atlas</label>
+          <div id="data-source-badge" class="data-source-badge ready" aria-live="polite">Ready</div>
+        </div>
         <div id="search-container">
           <input id="q" type="text" placeholder="who mentors ML juniors in kolkata..." autofocus autocomplete="off">
           <button id="search-btn">Scan Atlas</button>
@@ -43,11 +47,9 @@
       </aside>
 
       <section id="graph" class="graph-panel">
-        <div class="graph-grid" aria-hidden="true"></div>
         <div class="graph-hud">
           <div class="hud-stack">
             <div id="graph-state" class="hud-pill">Awaiting query</div>
-            <div id="query-context" class="query-context">Query terms: all signals</div>
           </div>
           <div class="hud-metrics">
             <div class="hud-metric">
@@ -73,18 +75,22 @@
           </div>
         </div>
 
-        <div id="loading" class="hidden">Mapping connections...</div>
-        <div id="viz"></div>
+        <div id="graph-stage" class="graph-stage">
+          <div id="loading" class="hidden">Mapping connections...</div>
+          <div id="viz"></div>
+        </div>
 
         <div class="graph-caption">
-          <span>● people &nbsp; ■ repos &nbsp; ◆ events — click any node to focus</span>
+          <span>Click any node to focus the cluster around it.</span>
           <span id="focus-label">Focus: none</span>
         </div>
       </section>
     </main>
   </div>
 
+
+
   <script src="https://unpkg.com/force-graph"></script>
-  <script src="app.js"></script>
+  <script type="module" src="/static/app.js"></script>
 </body>
 </html>
