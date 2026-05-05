@@ -157,6 +157,12 @@ class TestFrontendServing:
         assert "application/javascript" in resp.headers["content-type"]
         assert "API_BASE" in resp.text
 
+    def test_static_module_is_served(self, client):
+        resp = client.get("/static/modules/graphRenderer.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers["content-type"]
+        assert "createGraphRenderer" in resp.text
+
 
 # ---------------------------------------------------------------------------
 # Contract shape — matches the spec from member-a-query-agents.md exactly

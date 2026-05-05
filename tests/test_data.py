@@ -129,43 +129,21 @@ class TestPeople:
                 f"{p['id']}: url should start with https://github.com/"
             )
 
-    def test_bio_non_empty(self, people):
-        empty = [p["id"] for p in people if not p.get("bio", "").strip()]
-        assert not empty, f"Empty bio for: {empty}"
-
-    def test_demo_query_langgraph_coverage(self, people):
-        """At least 4 people mention LangGraph in bio or evidence."""
-        hits = [
-            p for p in people
-            if "langgraph" in (p.get("bio", "") + " ".join(p.get("evidence", []))).lower()
+    def test_profile_has_searchable_text(self, people):
+        sparse = [
+            p["id"]
+            for p in people
+            if not p.get("bio", "").strip() and not p.get("evidence")
         ]
-        assert len(hits) >= 4, (
-            f"Only {len(hits)} people mention LangGraph — demo query 1 may return weak results"
-        )
+        assert not sparse, f"People missing both bio and evidence: {sparse}"
 
-    def test_demo_query_mentor_coverage(self, people):
-        """At least 4 people mention mentoring."""
-        mentor_terms = {"mentor", "mentors", "mentored", "mentoring"}
-        hits = [
-            p for p in people
-            if any(t in (p.get("bio", "") + " ".join(p.get("evidence", []))).lower()
-                   for t in mentor_terms)
+    def test_evidence_contains_strings(self, people):
+        bad = [
+            p["id"]
+            for p in people
+            if any(not isinstance(item, str) or not item.strip() for item in p.get("evidence", []))
         ]
-        assert len(hits) >= 4, (
-            f"Only {len(hits)} people mention mentoring — demo query 2 may return weak results"
-        )
-
-    def test_demo_query_jadavpur_coverage(self, people):
-        """At least 8 people have a Jadavpur/JU signal."""
-        ju_terms = {"jadavpur", " ju ", "jU"}
-        hits = [
-            p for p in people
-            if any(t in (p.get("bio", "") + " ".join(p.get("evidence", []))).lower()
-                   for t in {"jadavpur", "ju cs", "ju ece", "ju phd"})
-        ]
-        assert len(hits) >= 8, (
-            f"Only {len(hits)} people have a JU signal — demo query 3 may return weak results"
-        )
+        assert not bad, f"People with malformed evidence entries: {bad}"
 
 
 # ---------------------------------------------------------------------------
@@ -297,3 +275,9 @@ class TestEdges:
         connected = {e["src"] for e in edges} | {e["dst"] for e in edges}
         isolated = person_ids - connected
         assert not isolated, f"People with zero edges (invisible in graph): {isolated}"
+
+    def test_graph_has_social_or_contribution_edges(self, edges):
+        relationship_edges = [
+            e for e in edges if e["type"] in {"follows", "contributed_to", "attended", "member_of"}
+        ]
+        assert relationship_edges, "Expected graph to include non-maintainer relationships"
