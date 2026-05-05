@@ -11,11 +11,7 @@ import { buildSearchModel, getLayoutProfile, seedNodePositions } from "./graphMo
 import { drawNode } from "./canvasDraw.js";
 import { clamp } from "./utils.js";
 
-const LEGEND_HTML = `
-  <div class="legend-item"><span class="legend-swatch"></span> People</div>
-  <div class="legend-item"><span class="legend-swatch repo"></span> Projects</div>
-  <div class="legend-item"><span class="legend-swatch event"></span> Events</div>
-`;
+
 
 function linkEndpointId(endpoint) {
   return typeof endpoint === "object" ? endpoint.id : endpoint;
@@ -61,17 +57,7 @@ export function createGraphRenderer({ onNodeFocus } = {}) {
     }
   }
 
-  function ensureLegend() {
-    if (dom.graphStage.querySelector(".graph-legend")) return;
-    const legend = document.createElement("div");
-    legend.className = "graph-legend";
-    legend.innerHTML = LEGEND_HTML;
-    dom.graphStage.appendChild(legend);
-  }
 
-  function removeLegend() {
-    dom.graphStage.querySelector(".graph-legend")?.remove();
-  }
 
   function syncGraphHighlight() {
     if (!graph) return;
@@ -99,7 +85,6 @@ export function createGraphRenderer({ onNodeFocus } = {}) {
     currentModel = null;
     highlightedNodeId = null;
     dom.vizContainer.innerHTML = "";
-    removeLegend();
   }
 
   function renderStageMessage(html) {
@@ -188,7 +173,6 @@ export function createGraphRenderer({ onNodeFocus } = {}) {
         .graphData({ nodes: model.nodes, links: model.links });
 
       configureForces(layout, model);
-      ensureLegend();
       updateCommunityGuides(model);
       setGraphMetrics(model.nodes.length, model.links.length);
       setGraphStatus(`${results.length} primary matches | ${COMMUNITY_NAMES[layout.focusCommunity]} in focus`);

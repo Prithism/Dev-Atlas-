@@ -4,6 +4,14 @@ export const API_BASE = window.location.protocol === "file:"
 
 export const QUERY_TIMEOUT_MS = 45000;
 
+// /graph is a pure read of an in-memory graph -- no LLM calls. Keep
+// the timeout tight so a stuck backend doesn't blank the landing page
+// for 45 seconds.
+export const GRAPH_TIMEOUT_MS = 8000;
+
+// Initial landing-view node budget. The backend caps at 1500.
+export const INITIAL_GRAPH_NODES = 350;
+
 export const EDGE_HIGHLIGHT = "#ff5d73";
 export const EDGE_ACCENT = "#3b82f6";
 

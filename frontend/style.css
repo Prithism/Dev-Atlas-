@@ -617,49 +617,7 @@ h1 {
   white-space: nowrap;
 }
 
-/* ── Legend overlay ────────────────────────────────────────────── */
-.graph-legend {
-  position: absolute;
-  left: var(--space-md);
-  top: var(--space-md);
-  z-index: 4;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm) var(--space-sm);
-  pointer-events: none;
-}
 
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border: var(--border);
-  border-radius: var(--pill);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: var(--shadow-sm);
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 700;
-}
-
-.legend-swatch {
-  flex-shrink: 0;
-  width: 12px;
-  height: 12px;
-  display: inline-block;
-  border: 2px solid var(--ink);
-  background: #ff8d7a;
-}
-
-.legend-swatch.repo {
-  background: var(--accent);
-}
-
-.legend-swatch.event {
-  background: #ffd84d;
-  transform: rotate(45deg);
-}
 
 /* ── Data source badge ─────────────────────────────────────────── */
 .data-source-badge {
@@ -797,9 +755,7 @@ h1 {
     gap: var(--space-xs);
   }
 
-  .graph-legend {
-    display: none;
-  }
+
 
   #focus-label {
     white-space: normal;
