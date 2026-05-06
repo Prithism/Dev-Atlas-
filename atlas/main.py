@@ -18,7 +18,7 @@ from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -68,6 +68,24 @@ async def query(req: QueryRequest):
     if not req.q.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     return await run_pipeline(req.q.strip(), app.state.retriever, app.state.client)
+
+
+@app.get("/graph")
+async def graph(
+    max_nodes: int = Query(default=350, ge=10, le=1500),
+):
+    """
+    Full Kolkata atlas graph for the no-query landing view.
+
+    No LLM calls. Returns nodes + edges in the same shape as POST /query's
+    `subgraph`, so the frontend renderer can consume it without changes.
+    """
+    retriever = app.state.retriever
+    return {
+        "subgraph": retriever.full_graph(max_nodes=max_nodes),
+        "node_total": retriever.G.number_of_nodes(),
+        "edge_total": retriever.G.number_of_edges(),
+    }
 
 
 @app.get("/health")

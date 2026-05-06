@@ -182,6 +182,27 @@ def mock_retriever():
         "edges": [{"src": "alice", "dst": "bob", "type": "follows"}],
     }
 
+    r.full_graph.return_value = {
+        "nodes": [
+            {"id": "alice", "label": "Alice Roy", "type": "person", "centrality": 0.4},
+            {"id": "bob", "label": "Bob Das", "type": "person", "centrality": 0.3},
+            {"id": "charlie", "label": "Charlie Sen", "type": "person", "centrality": 0.2},
+            {"id": "evt_gdg_cloud_2024", "label": "GDG Cloud Kolkata DevFest 2024", "type": "event", "centrality": 0.15},
+        ],
+        "edges": [
+            {"src": "alice", "dst": "bob", "type": "follows"},
+            {"src": "alice", "dst": "evt_gdg_cloud_2024", "type": "attended"},
+            {"src": "bob", "dst": "evt_gdg_cloud_2024", "type": "attended"},
+        ],
+    }
+
+    # Real Retriever exposes G (the NetworkX graph). Keep a tiny stand-in
+    # so /graph's node_total / edge_total fields work in tests.
+    fake_graph = MagicMock()
+    fake_graph.number_of_nodes.return_value = 4
+    fake_graph.number_of_edges.return_value = 3
+    r.G = fake_graph
+
     r.get_person.side_effect = lambda pid: {
         "alice": {
             "id": "alice",

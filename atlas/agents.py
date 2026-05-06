@@ -346,6 +346,12 @@ async def run_pipeline(
     """
     Full 4-agent pipeline.
     Falls back to 2-agent baseline when USE_FALLBACK is True.
+
+    Subgraph seeds:
+        Composer keeps the top 5 for the result-list cards, but the
+        subgraph is seeded from the broader retrieval set so the rendered
+        graph isn't five disconnected stars. The graph is meant to show
+        the *neighbourhood* of the answer, not just the answer.
     """
     if USE_FALLBACK:
         log.info("USE_FALLBACK=True, skipping Parser and Ranker")
@@ -359,7 +365,8 @@ async def run_pipeline(
     if not composed:
         return _empty_response(q)
 
-    return _format_response(composed, retriever)
+    subgraph_seed_ids = [r.person_id for r in ranked[:15]] or [r.id for r in composed]
+    return _format_response(composed, retriever, subgraph_seed_ids)
 
 
 async def run_fallback(
@@ -367,19 +374,24 @@ async def run_fallback(
     retriever: Retriever,
     client: anthropic.AsyncAnthropic,
 ) -> dict:
-    """2-agent baseline: Retriever + Composer only. Pre-built per PRD §7."""
-    raw_results = retriever.query(q, k=10)
+    """2-agent baseline: Retriever + Composer only."""
+    raw_results = retriever.query(q, k=15)
     if not raw_results:
         return _empty_response(q)
     composed = await composer_agent(client, q, raw_results[:5], retriever)
     if not composed:
         return _empty_response(q)
-    return _format_response(composed, retriever)
+    subgraph_seed_ids = [r.person_id for r in raw_results[:15]] or [r.id for r in composed]
+    return _format_response(composed, retriever, subgraph_seed_ids)
 
 
-def _format_response(composed: list[ComposedResult], retriever: Retriever) -> dict:
-    person_ids = [r.id for r in composed]
-    subgraph = retriever.subgraph(person_ids, hops=1)
+def _format_response(
+    composed: list[ComposedResult],
+    retriever: Retriever,
+    subgraph_seed_ids: list[str] | None = None,
+) -> dict:
+    seeds = subgraph_seed_ids if subgraph_seed_ids else [r.id for r in composed]
+    subgraph = retriever.subgraph(seeds, hops=2)
     return {
         "results": [
             {

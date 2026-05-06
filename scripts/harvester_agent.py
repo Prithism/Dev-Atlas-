@@ -1,5 +1,5 @@
 """
-PRD §11 Harvester agent.
+Harvester agent.
 
 Stateless and idempotent seed discovery for the ingest pipeline:
 - scrape public web search results from a free HTML endpoint
@@ -287,7 +287,7 @@ def merge_seed_candidates(
 
 class HarvesterAgent:
     """
-    PRD-style Harvester.
+    Stateless seed harvester.
 
     The agent is intentionally stateless:
     every run fetches public sources, extracts candidates, and overwrites
@@ -412,7 +412,7 @@ class HarvesterAgent:
             return []
 
         prompt = (
-            "You are the Harvester agent from the Kolkata Dev Atlas PRD. "
+            "You are the Kolkata Dev Atlas Harvester agent. "
             "Extract seed candidates for a Kolkata-focused developer graph from these public web search results.\n\n"
             "Rules:\n"
             "- Return only people, not repos, companies, or GitHub organizations.\n"
@@ -458,7 +458,7 @@ class HarvesterAgent:
 
     def _extract_candidates_from_source_page(self, source_url: str, page_text: str) -> list[SeedCandidate]:
         prompt = (
-            "You are the Harvester agent from the Kolkata Dev Atlas PRD. "
+            "You are the Kolkata Dev Atlas Harvester agent. "
             "Extract candidate developers from this public source page.\n\n"
             "Rules:\n"
             "- Only include people with an explicit GitHub handle or GitHub profile URL in the text.\n"
@@ -528,7 +528,7 @@ class HarvesterAgent:
         if GEMINI_API_KEY:
             try:
                 payload = self._call_gemini(
-                    "You are the Harvester agent from the Kolkata Dev Atlas PRD. "
+                    "You are the Kolkata Dev Atlas Harvester agent. "
                     "Extract seed candidates from these GitHub user profiles.\n\n"
                     "Rules:\n"
                     "- Return only likely Kolkata-adjacent developers.\n"
