@@ -1,9 +1,11 @@
 # Kolkata Dev Atlas
 
 > A queryable, graph-backed map of the Kolkata developer community.  
-> Ask natural-language questions and get ranked people, evidence, and an interactive 3-D network — all in one shot.
+> Open the page and the entire atlas renders as a force-directed graph. Ask a natural-language question and the graph re-centres on the answer, with ranked people, cited evidence, and the cluster around them — all in one shot.
 
 ---
+
+![Dashboard Preview](assets/Dashboard.png)
 
 ## Table of Contents
 
@@ -22,6 +24,7 @@
 - [API reference](#api-reference)
   - [GET /health](#get-health)
   - [POST /query](#post-query)
+  - [GET /graph](#get-graph)
 - [Frontend](#frontend)
 - [Testing](#testing)
   - [Test structure](#test-structure)
@@ -29,7 +32,9 @@
   - [Smoke tests](#smoke-tests)
 - [Configuration](#configuration)
   - [Kill switch](#kill-switch)
-  - [Pipeline timeout](#pipeline-timeout)
+  - [Frontend request timeouts](#frontend-request-timeouts)
+  - [Subgraph and full-graph caps](#subgraph-and-full-graph-caps)
+  - [Kolkata signal gate](#kolkata-signal-gate)
 - [Data model](#data-model)
   - [people.jsonl](#peoplejsonl)
   - [repos.jsonl](#reposjsonl)
@@ -47,13 +52,19 @@ Kolkata Dev Atlas answers questions like:
 - *"Who mentors junior ML engineers?"*
 - *"Show me the Jadavpur developer cluster"*
 
-For each query it returns:
+**Landing view (no query).** Open `/` and the entire Kolkata atlas renders as a force-directed graph: top-N people by centrality, repos owned by those people, events, and orgs — all interconnected. This is the no-query experience, a community map you can pan and click into. Press **Escape** at any time (or submit an empty query) to return to this overview.
+
+**Query view.** Submitting a query switches the graph into focused mode. For each query it returns:
 
 1. **Ranked people results** — name, GitHub URL, relevance score, and 2-3 evidence bullets
-2. **1-hop subgraph** — the matched people plus their repos, events, and org memberships, ready for D3 rendering
-3. **Interactive 3-D force graph** in the browser that re-clusters around the query's strongest signal
+2. **2-hop subgraph** seeded from the top-15 retrieval hits — capped at 180 nodes, prioritising bridge nodes (events, orgs, shared repos) so the rendered graph is interconnected rather than five disconnected stars
+3. **Interactive force graph** in the browser that re-clusters around the query's strongest signal
 
-The pipeline is fully resilient: if the LLM-powered Parser or Ranker agents fail, the service automatically falls back to a 2-agent baseline (Retriever + Composer) so the demo never breaks.
+**Kolkata-only by construction.** Every person in the graph carries a `kolkata_signal` (`github_location`, `event_attended`, `org_member`, or `manual_curation`). The build step rejects accounts that fail this gate — so a Kolkata developer who happens to follow a global account on GitHub does not pull that account into the atlas. The same gate is applied inside the retriever, so even a literal-keyword search cannot resurrect filtered-out records.
+
+**Hybrid retrieval.** Pure vector search against `all-MiniLM-L6-v2` gets dominated by the most frequent term in a query and buries rare technical tokens. The retriever blends vector similarity with literal keyword match, then graph centrality, so a query like *"langgraph kolkata"* surfaces the Kolkata developers who actually ship LangGraph rather than just the most-followed Kolkata developers in general.
+
+**Resilient pipeline.** If the LLM-powered Parser or Ranker agents fail, the service automatically falls back to a 2-agent baseline (Retriever + Composer). If the Composer fails too, raw evidence is returned. The graph is always renderable.
 
 ---
 
@@ -65,16 +76,18 @@ The pipeline is fully resilient: if the LLM-powered Parser or Ranker agents fail
 | Who mentors ML juniors in Kolkata? | Mentor/educator network |
 | Show Jadavpur developer network | University alumni cluster |
 
-These three queries are also available as quick-launch buttons in the UI and execute against the live backend. If the backend is unavailable, the UI now shows the failure instead of masking it with canned demo results.
+These are the recommended smoke-test queries for the live backend. If the backend is unavailable, the UI shows the failure instead of masking it with canned demo results.
 
 ---
 
 ## Architecture
 
 ```
-Browser (3D force-graph)
+Browser (force-graph)
         │
-        │ POST /query   GET /  GET /*.js  GET /*.css
+        │ GET /            GET /*.js  GET /*.css
+        │ GET /graph       — landing view, full atlas, no LLM
+        │ POST /query      — focused view, 4-agent pipeline
         ▼
 ┌──────────────────────────────────────────────┐
 │              FastAPI  (atlas/main.py)         │
@@ -104,16 +117,29 @@ Browser (3D force-graph)
 ┌──────────────────────────────────────────────┐
 │           Retriever  (atlas/retrieval.py)     │
 │                                               │
-│  ChromaDB (cosine)  ──► semantic similarity   │
-│  NetworkX DiGraph   ──► PageRank centrality   │
-│  Scoring: 0.7 × vec_score + 0.3 × centrality │
-│  Subgraph: 1-hop ego, capped at 50 nodes      │
+│  Hybrid retrieval:                            │
+│   - ChromaDB (cosine)  → vector similarity    │
+│   - Literal keyword match → rare-token boost  │
+│   - PageRank centrality → 30% blend           │
+│                                               │
+│  Subgraph (2-hop, max 180):                   │
+│   - shared-with-many-seeds beats centrality   │
+│   - bridge nodes (events, orgs) always kept   │
+│                                               │
+│  full_graph(max=350) for /graph:              │
+│   - top persons + their repos + all bridges   │
+│   - every visible repo has a visible owner    │
+│                                               │
+│  Kolkata gate: self._people / _search_docs    │
+│  filtered to graph members only — no leakage. │
 └───────────────┬──────────────────────────────┘
                 │
                 ▼
 ┌──────────────────────────────────────────────┐
 │         Data Layer  (data/)                   │
 │  people.jsonl · repos.jsonl · edges.jsonl     │
+│  kolkata_seeds.txt (allowlist, optional)      │
+│  denylist.txt        (blocklist, optional)    │
 │  graph.pkl (NetworkX)  ·  chroma/ (ChromaDB)  │
 └──────────────────────────────────────────────┘
 ```
@@ -125,6 +151,11 @@ scripts/ingest.py       ──► data/raw/  +  data/*.jsonl
        │
        ▼  (harvester + GitHub search + network expansion + event cross-ref)
 scripts/build_index.py  ──► data/graph.pkl  +  data/chroma/
+   │
+   │  Per-person Kolkata signal gate (rejects global drift):
+   │   github_location | event_attended | org_member | manual_curation
+   │  Synthesises `attended` / `member_of` edges from evidence text
+   │  so people share bridge nodes instead of only their own repos.
 ```
 
 ---
@@ -152,39 +183,55 @@ scripts/build_index.py  ──► data/graph.pkl  +  data/chroma/
 Dev-Atlas/
 ├── atlas/                   # Backend Python package
 │   ├── __init__.py
-│   ├── main.py              # FastAPI app, routes, lifespan
+│   ├── main.py              # FastAPI app: /query, /graph, /health, lifespan
 │   ├── agents.py            # 4-agent query pipeline + fallback
-│   └── retrieval.py         # Retriever class (graph + vector)
+│   └── retrieval.py         # Retriever: hybrid retrieval, subgraph, full_graph
 │
 ├── scripts/                 # Offline data pipeline (run before serving)
 │   ├── ingest.py            # 5-pass data collector
-│   └── harvester_agent.py   # Gemini-powered seed harvester
+│   ├── harvester_agent.py   # Seed harvester (slated for removal in M0)
+│   └── build_index.py       # Kolkata-signal gate + edge synthesis + index
 │
 ├── frontend/                # Static single-page UI (no build step)
 │   ├── index.html
-│   ├── app.js               # ForceGraph3D + search logic
-│   └── style.css            # Neo-brutalist design system
+│   ├── app.js               # Search + landing-overview controller
+│   ├── style.css            # Neo-brutalist design system
+│   └── modules/
+│       ├── api.js           # queryAtlas, fetchFullGraph
+│       ├── config.js        # API_BASE, timeouts, INITIAL_GRAPH_NODES
+│       ├── dom.js           # DOM refs and badge / metric setters
+│       ├── graphRenderer.js # force-graph wrapper
+│       ├── graphModel.js    # Subgraph → renderable model
+│       ├── canvasDraw.js    # Node drawing
+│       ├── results.js       # Result-card list
+│       └── utils.js         # Shared helpers
 │
 ├── data/                    # Source JSONL + generated artifacts
-│   ├── people.jsonl         # Person records (source of truth)
+│   ├── people.jsonl         # Person records (ingest interchange format)
 │   ├── repos.jsonl          # Repository records
 │   ├── edges.jsonl          # Graph edges (maintains/follows/attended/…)
+│   ├── kolkata_seeds.txt    # Optional manual allowlist (one ID per line)
+│   ├── denylist.txt         # Optional permanent blocklist
 │   ├── graph.pkl            # Generated — NetworkX DiGraph (gitignored)
 │   └── chroma/              # Generated — ChromaDB store (gitignored)
 │
+├── docs/
+│   └── kolkata-dev-atlas-prd.md     # Product spec
+│
 ├── tests/
 │   ├── conftest.py          # Shared fixtures (mock retriever, LLM client)
-│   ├── test_retrieval.py    # Retriever unit tests
+│   ├── test_retrieval.py    # Retriever, subgraph, full_graph, hybrid blend
 │   ├── test_agents.py       # Agent pipeline unit + timeout tests
-│   ├── test_api.py          # FastAPI integration tests
-│   ├── test_build_index.py  # Index builder tests
+│   ├── test_api.py          # FastAPI /query, /graph, /health
+│   ├── test_build_index.py  # Index builder + Kolkata gate tests
 │   ├── test_data.py         # JSONL schema + integrity tests
+│   ├── test_ingest.py       # Ingest pipeline tests
 │   └── test_harvester_agent.py
 │
 ├── .env                     # Secrets — never committed (see .gitignore)
 ├── pytest.ini
 ├── requirements.txt
-└── README.md
+└── readme.md
 ```
 
 ---
@@ -274,13 +321,35 @@ python scripts/build_index.py
 
 This script:
 
-1. Reads `data/people.jsonl`, `data/repos.jsonl`, `data/edges.jsonl`
-2. Builds a **NetworkX DiGraph** and computes **PageRank** centrality
-3. Saves `data/graph.pkl`
-4. Encodes all bios + repo descriptions with `all-MiniLM-L6-v2`
-5. Writes a **ChromaDB** cosine collection to `data/chroma/`
+1. Reads `data/people.jsonl`, `data/repos.jsonl`, `data/edges.jsonl` (plus optional `data/kolkata_seeds.txt` and `data/denylist.txt`).
+2. **Synthesises bridge edges** (`attended`, `member_of`) from each person's evidence text, so people connect through shared events / orgs instead of only through their own repos.
+3. **Derives a `kolkata_signal`** for every person record: `github_location`, `event_attended`, `org_member`, or `manual_curation`. Records that fail the gate are **rejected** — they don't enter the graph or the vector index, even if other people in the graph follow them. This is what stops global drift (Linus Torvalds etc.) from re-entering via `follows` edges.
+4. Builds a **NetworkX DiGraph** with only Kolkata-grounded persons and computes **PageRank** centrality.
+5. Saves `data/graph.pkl`.
+6. Encodes bios + repo descriptions of admitted people with `all-MiniLM-L6-v2`.
+7. Writes a **ChromaDB** cosine collection to `data/chroma/`.
 
-Re-run whenever you modify any JSONL source file. The script is idempotent — it recreates the Chroma collection from scratch each time.
+Re-run whenever you modify any JSONL source file or the allowlist/denylist. The script is idempotent — it recreates the Chroma collection and graph pickle from scratch each time.
+
+**Expected output (truncated):**
+
+```
+Loading JSONL files...
+  433 people, 4248 repos, 4435 raw edges
+Synthesising event/org bridge edges from evidence...
+  +32 synthesised edges -> 4467 total
+Deriving kolkata_signal for every person...
+  Admitted: 398 people
+     396  github_location
+       2  org_member
+  Rejected: 35 people (no Kolkata signal)
+    - torvalds
+    - bradtraversy
+    ...
+Building NetworkX graph (Kolkata-only)...
+  4343 nodes, 3989 edges
+  Persons: 398  Repos: 3932  Events: 7  Orgs: 6
+```
 
 **Quick smoke-test after building:**
 
@@ -381,7 +450,7 @@ Run the full 4-agent pipeline against the graph and return ranked results plus a
 | `results[].score` | float | Blended relevance score `[0, 1]` |
 | `results[].evidence` | string[] | 2–3 human-readable evidence bullets |
 | `results[].url` | string | GitHub profile URL |
-| `subgraph.nodes` | array | All nodes in the 1-hop ego subgraph (max 50) |
+| `subgraph.nodes` | array | All nodes in the 2-hop ego subgraph (max 180) |
 | `subgraph.edges` | array | Edges between those nodes |
 
 **No-results response** also includes a `message` field:
@@ -412,6 +481,65 @@ curl -s -X POST http://localhost:8000/query \
 
 ---
 
+### GET /graph
+
+Return the entire Kolkata atlas — top-N nodes by centrality plus all bridge nodes (events, orgs) — for the no-query landing view. **No LLM calls**, so latency is sub-second once the in-memory graph is loaded.
+
+**Query parameters:**
+
+| Param | Type | Default | Range | Description |
+|---|---|---|---|---|
+| `max_nodes` | int | `350` | `[10, 1500]` | Maximum number of nodes in the returned subgraph. The selection is connectivity-aware: every visible repo has a visible owner edge. |
+
+**Response `200 OK`:**
+
+```json
+{
+  "subgraph": {
+    "nodes": [
+      {"id": "alice", "label": "Alice Roy", "type": "person", "centrality": 0.031},
+      {"id": "alice/langgraph-demo", "label": "alice/langgraph-demo", "type": "repo", "centrality": 0.009},
+      {"id": "evt_gdg_cloud_2024", "label": "GDG Cloud Kolkata DevFest 2024", "type": "event", "centrality": 0.014}
+    ],
+    "edges": [
+      {"src": "alice", "dst": "alice/langgraph-demo", "type": "maintains"},
+      {"src": "alice", "dst": "evt_gdg_cloud_2024", "type": "attended"}
+    ]
+  },
+  "node_total": 4343,
+  "edge_total": 3989
+}
+```
+
+**Response fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `subgraph.nodes` | array | The selected nodes (up to `max_nodes`). |
+| `subgraph.edges` | array | Edges between those nodes (induced subgraph). |
+| `node_total` | int | Total nodes in the underlying NetworkX graph (Kolkata-only). |
+| `edge_total` | int | Total edges in the underlying graph. |
+
+**Selection quotas (when capped):**
+
+- 65% **persons** — top by PageRank centrality
+- 30% **repos** — top by centrality, restricted to repos *owned by* a selected person, so every visible repo has a visible owner edge
+- All **events** and **orgs** — there are at most a few dozen; they are the connective tissue of the rendered graph
+
+**Error responses:**
+
+| Code | Condition |
+|---|---|
+| `422 Unprocessable Entity` | `max_nodes` outside `[10, 1500]` |
+
+**cURL example:**
+
+```bash
+curl -s "http://localhost:8000/graph?max_nodes=200" | python -m json.tool | head -40
+```
+
+---
+
 ## Frontend
 
 The frontend is a **single-page app** — plain JavaScript, no build step, no Node.js required.
@@ -422,13 +550,13 @@ The frontend is a **single-page app** — plain JavaScript, no build step, no No
 
 **How it works:**
 
-1. On page load, the app fires an automatic search for *"Who works on LangGraph in Kolkata"*
-2. Posts to `http://localhost:8000/query` and waits up to **45 seconds** for the LLM pipeline to respond
-3. Renders ranked cards in the left panel and an interactive force graph on the right
-4. A status badge in the top-right corner shows whether live data is loading, active, or failed
-5. If the backend is unreachable or returns an error, the UI surfaces the failure so you know the atlas is not using live GitHub-backed results
+1. **On page load**, the app calls `GET /graph?max_nodes=350` and renders the **full Kolkata atlas** as a force graph — no LLM, sub-second.
+2. **Submitting a query** posts to `http://localhost:8000/query` and waits up to **45 seconds** for the 4-agent LLM pipeline. The graph re-centres around the answer.
+3. **Returning to overview** — pressing `Escape` (or submitting an empty query) clears the search and reloads the full-atlas view.
+4. Ranked result cards render in the left panel; the interactive force graph on the right responds to clicks (focus a cluster) and supports keyboard navigation through results.
+5. A status badge in the top-right corner shows whether live data is loading, active, or failed. If the backend is unreachable, the UI surfaces the failure rather than masking it with canned demo results.
 
-**Quick-launch buttons** at the top pre-fill and run the three canonical demo queries instantly.
+The three canonical demo queries are the best quick checks for the live backend.
 
 > **Note:** Always open the frontend via `http://localhost:8000/` rather than directly from
 > disk (`file:///…`). Opening as a file causes CDN scripts to resolve against the `file:`
@@ -442,11 +570,12 @@ The frontend is a **single-page app** — plain JavaScript, no build step, no No
 
 | File | Coverage area |
 |---|---|
-| `tests/test_retrieval.py` | `Retriever.query()`, `subgraph()`, `get_person()`, keyword fallback, centrality scoring |
-| `tests/test_agents.py` | Each agent in isolation, `run_pipeline()`, kill-switch fallback, `run_fallback()` |
-| `tests/test_api.py` | FastAPI `/query` and `/health` contracts, response shape, error handling |
-| `tests/test_build_index.py` | `build_graph()`, `compute_centrality()`, `build_chroma()` |
+| `tests/test_retrieval.py` | `Retriever.query()`, `subgraph()`, `full_graph()`, `get_person()`, hybrid keyword+vector blend, centrality scoring, smoke tests against live data |
+| `tests/test_agents.py` | Each agent in isolation, `run_pipeline()`, kill-switch fallback, `run_fallback()`, subgraph seed-set handling |
+| `tests/test_api.py` | FastAPI `/query`, `/graph`, and `/health` contracts, response shape, validation bounds, error handling |
+| `tests/test_build_index.py` | `build_graph()`, `compute_centrality()`, `build_chroma()`, strict-vs-legacy Kolkata gate, edge synthesis |
 | `tests/test_data.py` | JSONL schema integrity, required fields, isolated nodes, duplicate IDs |
+| `tests/test_ingest.py` | Ingest pipeline shape and idempotence |
 | `tests/test_harvester_agent.py` | HarvesterAgent seed shape and deduplication |
 
 ### Running tests
@@ -468,10 +597,10 @@ pytest -x
 Expected output (after `build_index.py` has been run):
 
 ```
-90 passed, 7 skipped in ~6s
+179 passed in ~20s
 ```
 
-The 7 skipped tests are **smoke tests** that require `data/graph.pkl` to exist. They run automatically once the index is built.
+The smoke tests under `TestSmokeQueries` require `data/graph.pkl` to exist; they run automatically once the index is built. One test (`test_langgraph_kolkata_top_result_is_relevant`) skips itself if the dataset contains no LangGraph-tagged people — that's a data-discovery problem, not a retrieval bug.
 
 ### Smoke tests
 
@@ -497,16 +626,41 @@ USE_FALLBACK = False   # flip to True to drop to 2-agent baseline immediately
 
 Setting `USE_FALLBACK = True` skips the Parser and Ranker agents entirely and routes every query through the 2-agent baseline (Retriever + Composer). Use this if Parser or Ranker output is unstable.
 
-### Frontend request timeout
-
-The browser waits up to **45 seconds** for the backend before falling back to demo data:
+### Frontend request timeouts
 
 ```javascript
-// frontend/app.js
-const QUERY_TIMEOUT_MS = 45000;
+// frontend/modules/config.js
+export const QUERY_TIMEOUT_MS = 45000;     // POST /query — full 4-agent pipeline
+export const GRAPH_TIMEOUT_MS = 8000;      // GET  /graph — pure read, no LLM
+export const INITIAL_GRAPH_NODES = 350;    // landing-view node budget
 ```
 
-This accommodates the full 4-agent pipeline (3 sequential LLM calls). If you're using a faster model or the 2-agent fallback, you can lower this value. The **● Live data** badge confirms the backend responded within the window.
+`QUERY_TIMEOUT_MS` accommodates the full 4-agent pipeline (3 sequential LLM calls). If you're using a faster model or the 2-agent fallback, you can lower this. `GRAPH_TIMEOUT_MS` is intentionally tight — `/graph` does not call the LLM, so a stuck backend should not blank the landing page for 45 seconds.
+
+### Subgraph and full-graph caps
+
+```python
+# atlas/retrieval.py
+def subgraph(self, person_ids, hops=2, max_nodes=180): ...
+def full_graph(self, max_nodes=350, include_types=None): ...
+```
+
+| Setting | Default | Notes |
+|---|---|---|
+| Subgraph hops | `2` | 1-hop produced disconnected stars; 2-hop traverses through shared events / orgs and gives a properly interconnected graph. |
+| Subgraph cap | `180` | Force-graph handles 180 nodes comfortably. Selection prefers nodes that bridge multiple seeds. |
+| `full_graph` cap | `350` | The default landing-view size. Selection is connectivity-aware — every visible repo has a visible owner. The `/graph` endpoint accepts `max_nodes` in `[10, 1500]`. |
+
+### Kolkata signal gate
+
+`scripts/build_index.py` rejects person records that fail the Kolkata gate. Two optional files in `data/` bias the gate:
+
+| File | Effect |
+|---|---|
+| `data/kolkata_seeds.txt` | Manual allowlist. One ID per line. IDs here are admitted with `kolkata_signal = manual_curation`, even if their `location` is empty or generic. |
+| `data/denylist.txt` | Permanent blocklist. One ID per line. IDs here are always rejected, even if they would otherwise pass the gate. Use for vandalism, opt-outs, or duplicates. |
+
+Both files are gitignored if you prefer to keep curation private; commit them if you want curation to be reviewable in PRs.
 
 ---
 
@@ -525,9 +679,17 @@ All source data lives in `data/*.jsonl` (one JSON object per line).
   "languages": ["Python", "TypeScript"],
   "followers": 312,
   "url": "https://github.com/rishiraj",
-  "evidence": ["Speaker at GDG DevFest 2024", "LangChain contributor"]
+  "evidence": ["Speaker at GDG DevFest 2024", "LangChain contributor"],
+
+  // Set by build_index.py — do not hand-edit. Records that fail the
+  // gate (kolkata_signal stays null) are rejected at build time.
+  "kolkata_signal": "github_location",       // github_location | event_attended |
+                                             //   org_member | manual_curation
+  "signal_evidence_url": "https://github.com/rishiraj"
 }
 ```
+
+`kolkata_signal` and `signal_evidence_url` are stamped onto each record by `scripts/build_index.py` after running `derive_kolkata_signal()`. They are written back into the JSONL file in-memory only — the on-disk JSONL is the ingest interchange format and may not have them yet. The gate is enforced unconditionally when the build is run with `kolkata_ids` derived from the gate.
 
 ### repos.jsonl
 
@@ -588,12 +750,15 @@ All source data lives in `data/*.jsonl` (one JSON object per line).
 
 ## Contributing
 
-1. **Keep the public contracts stable.** The three interfaces that cross team boundaries are:
+1. **Keep the public contracts stable.** The interfaces that cross module boundaries are:
    - `Retriever.query(text, k)` → `list[Result]`
-   - `Retriever.subgraph(person_ids, hops)` → `dict`
+   - `Retriever.subgraph(person_ids, hops, max_nodes)` → `dict`
+   - `Retriever.full_graph(max_nodes, include_types)` → `dict`
+   - `Retriever.get_person(person_id)` → `dict`
    - `POST /query` request/response shape
+   - `GET /graph` request/response shape
 
-   If you need to change any of these, update the frontend and all test assertions together.
+   If you change any of these, update the frontend, the product spec, and all test assertions in the same PR.
 
 2. **Run the full test suite before opening a PR.**
 
@@ -601,14 +766,20 @@ All source data lives in `data/*.jsonl` (one JSON object per line).
    pytest -q
    ```
 
-3. **The pipeline has a fallback — fix the root cause.** If Parser or Ranker is producing bad output, diagnose and fix rather than widening the kill switch permanently.
+   Expect 179 passing. CI gates on `kolkata_signal` (no record without one), on the discovery-bias regression test, and on the API contract shape.
 
-4. **Adding new people / events / edges?**
-   - Edit `data/people.jsonl`, `data/repos.jsonl`, and/or `data/edges.jsonl`
-   - Re-run `python scripts/build_index.py`
-   - Every person must have at least one edge (`test_data.py` will catch isolated nodes)
+3. **The pipeline has a fallback — fix the root cause.** If Parser or Ranker is producing bad output, diagnose and fix rather than widening the `USE_FALLBACK` kill switch permanently.
 
-5. **Do not commit secrets.** `.env`, `data/graph.pkl`, `data/chroma/`, and `data/raw/` are gitignored and must stay that way.
+4. **Adding people the ingest pipeline missed?**
+   - First: try adding their GitHub login to `data/kolkata_seeds.txt` and re-running `build_index.py`. The allowlist exists for exactly this case (low-following Kolkata builders that automated discovery doesn't find).
+   - If you have curated metadata: edit `data/people.jsonl`, `data/repos.jsonl`, `data/edges.jsonl` directly.
+   - Every person must have at least one edge (`test_data.py` will catch isolated nodes) and a defensible `kolkata_signal` after the build runs.
+
+5. **Removing or correcting people.**
+   - To permanently exclude someone (vandalism, opt-out, duplicate): add their ID to `data/denylist.txt`. The gate is enforced even if other paths would otherwise admit them.
+   - To correct a record: edit `data/people.jsonl` and re-run `build_index.py`.
+
+6. **Do not commit secrets.** `.env`, `data/graph.pkl`, `data/chroma/`, and `data/raw/` are gitignored and must stay that way.
 
 ---
 
