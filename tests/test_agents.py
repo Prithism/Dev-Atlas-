@@ -474,7 +474,10 @@ class TestRunFallback:
         )
         await run_fallback("jadavpur cluster", mock_retriever, mock_anthropic_client)
 
-        mock_retriever.query.assert_called_once_with("jadavpur cluster", k=10)
+        # composer keeps top-5 for the result list, but the retriever
+        # returns more so the subgraph has enough seeds to look
+        # interconnected.
+        mock_retriever.query.assert_called_once_with("jadavpur cluster", k=15)
 
     async def test_empty_retrieval_returns_message(
         self, mock_anthropic_client, mock_retriever

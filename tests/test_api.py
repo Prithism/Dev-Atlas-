@@ -144,6 +144,48 @@ class TestHealthEndpoint:
         assert resp.json() == {"status": "ok"}
 
 
+# ---------------------------------------------------------------------------
+# GET /graph — full Kolkata atlas for the no-query landing view
+# ---------------------------------------------------------------------------
+
+
+class TestGraphEndpoint:
+    def test_graph_returns_200(self, client):
+        resp = client.get("/graph")
+        assert resp.status_code == 200
+
+    def test_graph_response_has_subgraph(self, client):
+        resp = client.get("/graph")
+        body = resp.json()
+        assert "subgraph" in body
+        assert "nodes" in body["subgraph"]
+        assert "edges" in body["subgraph"]
+
+    def test_graph_response_has_totals(self, client):
+        resp = client.get("/graph")
+        body = resp.json()
+        assert "node_total" in body
+        assert "edge_total" in body
+        assert isinstance(body["node_total"], int)
+        assert isinstance(body["edge_total"], int)
+
+    def test_graph_default_max_nodes(self, client, mock_retriever):
+        client.get("/graph")
+        mock_retriever.full_graph.assert_called_with(max_nodes=350)
+
+    def test_graph_respects_max_nodes_param(self, client, mock_retriever):
+        client.get("/graph?max_nodes=120")
+        mock_retriever.full_graph.assert_called_with(max_nodes=120)
+
+    def test_graph_max_nodes_below_floor_returns_422(self, client):
+        resp = client.get("/graph?max_nodes=5")
+        assert resp.status_code == 422
+
+    def test_graph_max_nodes_above_ceiling_returns_422(self, client):
+        resp = client.get("/graph?max_nodes=10000")
+        assert resp.status_code == 422
+
+
 class TestFrontendServing:
     def test_root_serves_index_html(self, client):
         resp = client.get("/")

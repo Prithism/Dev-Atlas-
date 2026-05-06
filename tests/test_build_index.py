@@ -93,8 +93,11 @@ class TestBuildGraphNodes:
             assert self.G.nodes[evt_id]["type"] == TYPE_EVENT
 
     def test_event_nodes_carry_name(self):
-        for evt_id, evt_name in EVENT_META.items():
-            assert self.G.nodes[evt_id]["name"] == evt_name
+        # EVENT_META values are dicts of the form {name, patterns}; the
+        # display name lives at meta["name"].
+        for evt_id, meta in EVENT_META.items():
+            expected_name = meta["name"] if isinstance(meta, dict) else meta
+            assert self.G.nodes[evt_id]["name"] == expected_name
 
     def test_org_nodes_exist(self):
         for org_id in ORG_META:
@@ -104,7 +107,25 @@ class TestBuildGraphNodes:
         for org_id in ORG_META:
             assert self.G.nodes[org_id]["type"] == TYPE_ORG
 
-    def test_unknown_dst_auto_created(self):
+    def test_unknown_dst_is_dropped_in_kolkata_mode(self):
+        """
+        Strict-mode contract: edges to person IDs that aren't in
+        `kolkata_ids` are dropped at build time. This is the gate that
+        prevents global-network drift (e.g. Linus Torvalds) from entering
+        the graph via `follows` edges from Kolkata seeds.
+        """
+        extra_edges = [{"src": "alice", "dst": "unknown_global_dev", "type": "follows"}]
+        kolkata_ids = {p["id"] for p in PEOPLE}  # excludes 'unknown_global_dev'
+        G = build_graph(PEOPLE, REPOS, extra_edges, kolkata_ids=kolkata_ids)
+        assert "unknown_global_dev" not in G.nodes
+        assert not G.has_edge("alice", "unknown_global_dev")
+
+    def test_unknown_dst_auto_created_when_no_kolkata_gate(self):
+        """
+        Permissive-mode path: when `kolkata_ids` is None (e.g. a unit-test
+        fixture), the gate is open and missing endpoints are materialised
+        as person nodes.
+        """
         extra_edges = [{"src": "alice", "dst": "unknown_person", "type": "follows"}]
         G = build_graph(PEOPLE, REPOS, extra_edges)
         assert "unknown_person" in G.nodes
